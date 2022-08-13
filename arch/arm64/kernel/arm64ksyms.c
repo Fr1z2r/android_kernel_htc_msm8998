@@ -80,3 +80,7 @@ EXPORT_SYMBOL(__dma_flush_range);
 	/* arm-smccc */
 EXPORT_SYMBOL(arm_smccc_smc);
 EXPORT_SYMBOL(arm_smccc_hvc);
+
+	/* arm-smccc */
+EXPORT_SYMBOL(arm_smccc_smc);
+EXPORT_SYMBOL(arm_smccc_hvc);
