@@ -2030,14 +2030,6 @@ static int msm_pcm_playback_dnmix_ctl_info(struct snd_kcontrol *kcontrol,
 	return 0;
 }
 
-static int msm_pcm_playback_dnmix_ctl_info(struct snd_kcontrol *kcontrol,
-					struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_BYTES;
-	uinfo->count = sizeof(struct asm_stream_pan_ctrl_params);
-	return 0;
-}
-
 static int msm_pcm_playback_dnmix_ctl_put(struct snd_kcontrol *kcontrol,
 					struct snd_ctl_elem_value *ucontrol)
 {

@@ -348,34 +348,6 @@ bail:
 	return result;
 }
 
-/**
-* ipa3_allocate_nat_table() - Allocates memory for the NAT table
-* @table_alloc: [in/out] memory parameters
-*
-* Called by NAT client to allocate memory for the table entries.
-* Based on the request size either shared or system memory will be used.
-*
-* Returns:	0 on success, negative on failure
-*/
-int ipa3_allocate_nat_table(struct ipa_ioc_nat_ipv6ct_table_alloc *table_alloc)
-{
-	int result;
-	struct ipa_ioc_nat_alloc_mem tmp;
-
-	strlcpy(tmp.dev_name, IPA_NAT_DEV_NAME, IPA_RESOURCE_NAME_MAX);
-	tmp.size = table_alloc->size;
-	tmp.offset = 0;
-
-	result = ipa3_allocate_nat_device(&tmp);
-	if (result)
-		goto bail;
-
-	table_alloc->offset = tmp.offset;
-
-bail:
-	return result;
-}
-
 /* IOCTL function handlers */
 /**
  * ipa3_nat_init_cmd() - Post IP_V4_NAT_INIT command to IPA HW

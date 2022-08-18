@@ -3406,9 +3406,6 @@ ret:
 	case IPA_IOC_DEL_NAT_TABLE32:
 		cmd = IPA_IOC_DEL_NAT_TABLE;
 		break;
-	case IPA_IOC_DEL_NAT_TABLE32:
-		cmd = IPA_IOC_DEL_NAT_TABLE;
-		break;
 	case IPA_IOC_GET_NAT_OFFSET32:
 		cmd = IPA_IOC_GET_NAT_OFFSET;
 		break;
@@ -4581,6 +4578,62 @@ static int ipa3_tz_unlock_reg(struct ipa3_context *ipa3_ctx)
 		kfree(ipa_tz_unlock_vec);
 	}
 	return 0;
+}
+
+static int ipa3_trigger_fw_loading_mdms(void)
+{
+    int result;
+    const struct firmware *fw;
+
+    IPADBG("FW loading process initiated\n");
+
+    result = request_firmware(&fw, IPA_FWS_PATH, ipa3_ctx->dev);
+    if (result < 0) {
+        IPAERR("request_firmware failed, error %d\n", result);
+        return result;
+    }
+    if (fw == NULL) {
+        IPAERR("Firmware is NULL!\n");
+        return -EINVAL;
+    }
+
+    IPADBG("FWs are available for loading\n");
+
+    result = ipa3_load_fws(fw, ipa3_res.transport_mem_base);
+    if (result) {
+        IPAERR("IPA FWs loading has failed\n");
+        release_firmware(fw);
+        return result;
+    }
+
+    result = gsi_enable_fw(ipa3_res.transport_mem_base,
+                           ipa3_res.transport_mem_size);
+    if (result) {
+        IPAERR("Failed to enable GSI FW\n");
+        release_firmware(fw);
+        return result;
+    }
+
+    release_firmware(fw);
+
+    IPADBG("FW loading process is complete\n");
+    return 0;
+}
+
+static int ipa3_trigger_fw_loading_msms(void)
+{
+    void *subsystem_get_retval = NULL;
+
+    IPADBG("FW loading process initiated\n");
+
+    subsystem_get_retval = subsystem_get(IPA_SUBSYSTEM_NAME);
+    if (IS_ERR_OR_NULL(subsystem_get_retval)) {
+        IPAERR("Unable to trigger PIL process for FW loading\n");
+        return -EINVAL;
+    }
+
+    IPADBG("FW loading process is complete\n");
+    return 0;
 }
 
 //HTC_RIL_START

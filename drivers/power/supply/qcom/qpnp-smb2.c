@@ -771,12 +771,6 @@ static int smb2_usb_port_get_prop(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CURRENT_MAX:
 		rc = smblib_get_prop_input_current_settled(chg, val);
 		break;
-	case POWER_SUPPLY_PROP_VOLTAGE_MAX:
-		val->intval = 5000000;
-		break;
-	case POWER_SUPPLY_PROP_CURRENT_MAX:
-		rc = smblib_get_prop_input_current_settled(chg, val);
-		break;
 	default:
 		pr_err_ratelimited("Get prop %d is not supported in pc_port\n",
 				psp);
@@ -1244,9 +1238,6 @@ static int smb2_batt_get_prop(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_FCC_STEPPER_ENABLE:
 		val->intval = chg->fcc_stepper_mode;
-		break;
-	case POWER_SUPPLY_PROP_CHARGE_COUNTER:
-		rc = smblib_get_prop_batt_charge_counter(chg, val);
 		break;
 	default:
 		pr_err("batt power supply prop %d not supported\n", psp);

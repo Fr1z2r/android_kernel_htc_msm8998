@@ -1791,148 +1791,120 @@ static int fg_configure_full_soc(struct fg_chip *chip, int bsoc)
 	return 0;
 }
 
-static int fg_configure_full_soc(struct fg_chip *chip, int bsoc)
-{
-	int rc;
-	u8 full_soc[2] = {0xFF, 0xFF};
-
-	/*
-	 * Once SOC masking condition is cleared, FULL_SOC and MONOTONIC_SOC
-	 * needs to be updated to reflect the same. Write battery SOC to
-	 * FULL_SOC and write a full value to MONOTONIC_SOC.
-	 */
-	rc = fg_sram_write(chip, FULL_SOC_WORD, FULL_SOC_OFFSET,
-			(u8 *)&bsoc, 2, FG_IMA_ATOMIC);
-	if (rc < 0) {
-		pr_err("failed to write full_soc rc=%d\n", rc);
-		return rc;
-	}
-
-	rc = fg_sram_write(chip, MONOTONIC_SOC_WORD, MONOTONIC_SOC_OFFSET,
-			full_soc, 2, FG_IMA_ATOMIC);
-	if (rc < 0) {
-		pr_err("failed to write monotonic_soc rc=%d\n", rc);
-		return rc;
-	}
-
-	return 0;
-}
-
 #define AUTO_RECHG_VOLT_LOW_LIMIT_MV	3700
 static int fg_charge_full_update(struct fg_chip *chip)
 {
-	union power_supply_propval prop = {0, };
-	int rc, msoc, bsoc, recharge_soc, msoc_raw;
+    union power_supply_propval prop = {0, };
+    int rc, msoc, bsoc, recharge_soc, msoc_raw;
 
-	if (!chip->dt.hold_soc_while_full)
-		return 0;
+    if (!chip->dt.hold_soc_while_full)
+        return 0;
 
-	if (!batt_psy_initialized(chip))
-		return 0;
+    if (!batt_psy_initialized(chip))
+        return 0;
 
-	mutex_lock(&chip->charge_full_lock);
-	vote(chip->delta_bsoc_irq_en_votable, DELTA_BSOC_IRQ_VOTER,
-		chip->charge_done, 0);
-	rc = power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_HEALTH,
-		&prop);
-	if (rc < 0) {
-		pr_err("Error in getting battery health, rc=%d\n", rc);
-		goto out;
-	}
+    mutex_lock(&chip->charge_full_lock);
+    vote(chip->delta_bsoc_irq_en_votable, DELTA_BSOC_IRQ_VOTER,
+         chip->charge_done, 0);
+    rc = power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_HEALTH,
+                                   &prop);
+    if (rc < 0) {
+        pr_err("Error in getting battery health, rc=%d\n", rc);
+        goto out;
+    }
 
-	chip->health = prop.intval;
-	recharge_soc = chip->dt.recharge_soc_thr;
-	recharge_soc = DIV_ROUND_CLOSEST(recharge_soc * FULL_SOC_RAW,
-				FULL_CAPACITY);
-	rc = fg_get_sram_prop(chip, FG_SRAM_BATT_SOC, &bsoc);
-	if (rc < 0) {
-		pr_err("Error in getting BATT_SOC, rc=%d\n", rc);
-		goto out;
-	}
+    chip->health = prop.intval;
+    recharge_soc = chip->dt.recharge_soc_thr;
+    recharge_soc = DIV_ROUND_CLOSEST(recharge_soc * FULL_SOC_RAW,
+                                     FULL_CAPACITY);
+    rc = fg_get_sram_prop(chip, FG_SRAM_BATT_SOC, &bsoc);
+    if (rc < 0) {
+        pr_err("Error in getting BATT_SOC, rc=%d\n", rc);
+        goto out;
+    }
 
-	/* We need 2 most significant bytes here */
-	bsoc = (u32)bsoc >> 16;
-	rc = fg_get_msoc_raw(chip, &msoc_raw);
-	if (rc < 0) {
-		pr_err("Error in getting msoc_raw, rc=%d\n", rc);
-		goto out;
-	}
-	msoc = DIV_ROUND_CLOSEST(msoc_raw * FULL_CAPACITY, FULL_SOC_RAW);
+    /* We need 2 most significant bytes here */
+    bsoc = (u32)bsoc >> 16;
+    rc = fg_get_msoc_raw(chip, &msoc_raw);
+    if (rc < 0) {
+        pr_err("Error in getting msoc_raw, rc=%d\n", rc);
+        goto out;
+    }
+    msoc = DIV_ROUND_CLOSEST(msoc_raw * FULL_CAPACITY, FULL_SOC_RAW);
 
-	fg_dbg(chip, FG_STATUS, "msoc: %d bsoc: %x health: %d status: %d full: %d\n",
-		msoc, bsoc, chip->health, chip->charge_status,
-		chip->charge_full);
-	if (chip->charge_done && !chip->charge_full) {
-		if (msoc >= 99 && chip->health == POWER_SUPPLY_HEALTH_GOOD) {
-			fg_dbg(chip, FG_STATUS, "Setting charge_full to true\n");
-			chip->charge_full = true;
-			/*
-			 * Lower the recharge voltage so that VBAT_LT_RECHG
-			 * signal will not be asserted soon.
-			 */
-			rc = fg_set_recharge_voltage(chip,
-					AUTO_RECHG_VOLT_LOW_LIMIT_MV);
-			if (rc < 0) {
-				pr_err("Error in reducing recharge voltage, rc=%d\n",
-					rc);
-				goto out;
-			}
-		} else {
-			fg_dbg(chip, FG_STATUS, "Terminated charging @ SOC%d\n",
-				msoc);
-		}
-	} else if ((msoc_raw <= recharge_soc || !chip->charge_done)
-			&& chip->charge_full) {
-		if (chip->dt.linearize_soc) {
-			if (chip->dt.linearize_soc) {
-			chip->delta_soc = FULL_CAPACITY - msoc;
+    fg_dbg(chip, FG_STATUS, "msoc: %d bsoc: %x health: %d status: %d full: %d\n",
+           msoc, bsoc, chip->health, chip->charge_status,
+           chip->charge_full);
+    if (chip->charge_done && !chip->charge_full) {
+        if (msoc >= 99 && chip->health == POWER_SUPPLY_HEALTH_GOOD) {
+            fg_dbg(chip, FG_STATUS, "Setting charge_full to true\n");
+            chip->charge_full = true;
+            /*
+             * Lower the recharge voltage so that VBAT_LT_RECHG
+             * signal will not be asserted soon.
+             */
+            rc = fg_set_recharge_voltage(chip,
+                                         AUTO_RECHG_VOLT_LOW_LIMIT_MV);
+            if (rc < 0) {
+                pr_err("Error in reducing recharge voltage, rc=%d\n",
+                       rc);
+                goto out;
+            }
+        } else {
+            fg_dbg(chip, FG_STATUS, "Terminated charging @ SOC%d\n",
+                   msoc);
+        }
+    } else if ((msoc_raw <= recharge_soc || !chip->charge_done)
+               && chip->charge_full) {
+        if (chip->dt.linearize_soc) {
+            chip->delta_soc = FULL_CAPACITY - msoc;
 
-			/*
-			 * We're spreading out the delta SOC over every 10%
-			 * change in monotonic SOC. We cannot spread more than
-			 * 9% in the range of 0-100 skipping the first 10%.
-			 */
-			if (chip->delta_soc > 9) {
-				chip->delta_soc = 0;
-				chip->maint_soc = 0;
-			} else {
-				chip->maint_soc = FULL_CAPACITY;
-				chip->last_msoc = msoc;
-			}
-		}
+            /*
+             * We're spreading out the delta SOC over every 10%
+             * change in monotonic SOC. We cannot spread more than
+             * 9% in the range of 0-100 skipping the first 10%.
+             */
+            if (chip->delta_soc > 9) {
+                chip->delta_soc = 0;
+                chip->maint_soc = 0;
+            } else {
+                chip->maint_soc = FULL_CAPACITY;
+                chip->last_msoc = msoc;
+            }
+        }
 
-		/*
-		 * Raise the recharge voltage so that VBAT_LT_RECHG signal
-		 * will be asserted soon as battery SOC had dropped below
-		 * the recharge SOC threshold.
-		 */
-		rc = fg_set_recharge_voltage(chip,
-					chip->dt.recharge_volt_thr_mv);
-		if (rc < 0) {
-			pr_err("Error in setting recharge voltage, rc=%d\n",
-				rc);
-			goto out;
-		}
+        /*
+         * Raise the recharge voltage so that VBAT_LT_RECHG signal
+         * will be asserted soon as battery SOC had dropped below
+         * the recharge SOC threshold.
+         */
+        rc = fg_set_recharge_voltage(chip,
+                                     chip->dt.recharge_volt_thr_mv);
+        if (rc < 0) {
+            pr_err("Error in setting recharge voltage, rc=%d\n",
+                   rc);
+            goto out;
+        }
 
-		/*
-		 * If charge_done is still set, wait for recharging or
-		 * discharging to happen.
-		 */
-		if (chip->charge_done)
-			goto out;
+        /*
+         * If charge_done is still set, wait for recharging or
+         * discharging to happen.
+         */
+        if (chip->charge_done)
+            goto out;
 
-		rc = fg_configure_full_soc(chip, bsoc);
-		if (rc < 0)
-			goto out;
+        rc = fg_configure_full_soc(chip, bsoc);
+        if (rc < 0)
+            goto out;
 
-		chip->charge_full = false;
-		fg_dbg(chip, FG_STATUS, "msoc_raw = %d bsoc: %d recharge_soc: %d delta_soc: %d\n",
-			msoc_raw, bsoc >> 8, recharge_soc, chip->delta_soc);
-	}
+        chip->charge_full = false;
+        fg_dbg(chip, FG_STATUS, "msoc_raw = %d bsoc: %d recharge_soc: %d delta_soc: %d\n",
+               msoc_raw, bsoc >> 8, recharge_soc, chip->delta_soc);
+    }
 
-out:
-	mutex_unlock(&chip->charge_full_lock);
-	return rc;
+    out:
+    mutex_unlock(&chip->charge_full_lock);
+    return rc;
 }
 
 #define RCONN_CONFIG_BIT	BIT(0)
@@ -3780,9 +3752,6 @@ static int fg_psy_get_property(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CAPACITY_RAW:
 		rc = fg_get_msoc_raw(chip, &pval->intval);
 		break;
-	case POWER_SUPPLY_PROP_CAPACITY_RAW:
-		rc = fg_get_msoc_raw(chip, &pval->intval);
-		break;
 	case POWER_SUPPLY_PROP_VOLTAGE_NOW:
 		if (chip->battery_missing)
 			pval->intval = 3700000;
@@ -3858,9 +3827,6 @@ static int fg_psy_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER:
 		rc = fg_get_charge_counter(chip, &pval->intval);
-		break;
-	case POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW:
-		rc = fg_get_charge_counter_shadow(chip, &pval->intval);
 		break;
 	case POWER_SUPPLY_PROP_CHARGE_COUNTER_SHADOW:
 		rc = fg_get_charge_counter_shadow(chip, &pval->intval);

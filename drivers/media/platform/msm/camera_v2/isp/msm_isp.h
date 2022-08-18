@@ -863,7 +863,6 @@ struct vfe_device {
 
 	/* irq info */
 	uint32_t irq_sof_id;
-	struct isp_proc *isp_page;
 };
 
 struct vfe_parent_device {

@@ -2202,7 +2202,6 @@ static int tavil_codec_enable_hphr_pa(struct snd_soc_dapm_widget *w,
         }
 		if (!(strcmp(w->name, "HPHR PA")))
 			snd_soc_update_bits(codec, WCD934X_ANA_HPH, 0x40, 0x00);
-		}
 		break;
 	case SND_SOC_DAPM_POST_PMD:
 		/*

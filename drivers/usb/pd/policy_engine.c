@@ -727,7 +727,6 @@ static int pd_select_pdo(struct usbpd *pd, int pdo_pos, int uv, int ua)
 
 static int pd_eval_src_caps(struct usbpd *pd)
 {
-	int i;
 	union power_supply_propval val;
 	u32 first_pdo = pd->received_pdos[0];
 	int i = 0, sel_index = 0;

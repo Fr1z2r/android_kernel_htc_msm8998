@@ -523,7 +523,7 @@ static void usb_disable_work(struct work_struct *w)
 
     printk(KERN_INFO "[USB] %s\n", __func__);
     dwc3_otg_start_peripheral(mdwc, 0);
-    mdwc->otg_state = OTG_STATE_B_IDLE;
+    mdwc->drd_state = DRD_STATE_IDLE;
     pm_runtime_put_sync(mdwc->dev);
     return;
 }

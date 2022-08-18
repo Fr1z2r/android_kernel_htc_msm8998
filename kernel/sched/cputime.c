@@ -6,7 +6,6 @@
 #include <linux/context_tracking.h>
 #include <linux/cpufreq_times.h>
 #include "sched.h"
-#include "walt.h"
 
 
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
@@ -80,10 +79,9 @@ void irqtime_account_irq(struct task_struct *curr)
 
 	irq_time_write_end();
 
-	if (account) {
-		walt_account_irqtime(cpu, curr, delta, wallclock);
+	if (account)
 		sched_account_irqtime(cpu, curr, delta, wallclock);
-	} else if (curr != this_cpu_ksoftirqd())
+	else if (curr != this_cpu_ksoftirqd())
 		sched_account_irqstart(cpu, curr, wallclock);
 
 	local_irq_restore(flags);
@@ -127,17 +125,17 @@ static int irqtime_account_si_update(void)
 #endif /* !CONFIG_IRQ_TIME_ACCOUNTING */
 
 static inline void task_group_account_field(struct task_struct *p, int index,
-					    u64 tmp)
+                                            u64 tmp)
 {
-	/*
-	 * Since all updates are sure to touch the root cgroup, we
-	 * get ourselves ahead and touch it first. If the root cgroup
-	 * is the only cgroup, then nothing else should be necessary.
-	 *
-	 */
-	__this_cpu_add(kernel_cpustat.cpustat[index], tmp);
+    /*
+     * Since all updates are sure to touch the root cgroup, we
+     * get ourselves ahead and touch it first. If the root cgroup
+     * is the only cgroup, then nothing else should be necessary.
+     *
+     */
+    __this_cpu_add(kernel_cpustat.cpustat[index], tmp);
 
-	cpuacct_account_field(p, index, tmp);
+    cpuacct_account_field(p, index, tmp);
 }
 
 /*
@@ -147,27 +145,25 @@ static inline void task_group_account_field(struct task_struct *p, int index,
  * @cputime_scaled: cputime scaled by cpu frequency
  */
 void account_user_time(struct task_struct *p, cputime_t cputime,
-		       cputime_t cputime_scaled)
+                       cputime_t cputime_scaled)
 {
-	int index;
+    int index;
 
-	/* Add user time to process. */
-	p->utime += cputime;
-	p->utimescaled += cputime_scaled;
-	account_group_user_time(p, cputime);
+    /* Add user time to process. */
+    p->utime += cputime;
+    p->utimescaled += cputime_scaled;
+    account_group_user_time(p, cputime);
 
-	index = (task_nice(p) > 0) ? CPUTIME_NICE : CPUTIME_USER;
+    index = (task_nice(p) > 0) ? CPUTIME_NICE : CPUTIME_USER;
 
-	/* Add user time to cpustat. */
-	task_group_account_field(p, index, (__force u64) cputime);
+    /* Add user time to cpustat. */
+    task_group_account_field(p, index, (__force u64) cputime);
 
-	/* Account for user time used */
-	acct_account_cputime(p);
+    /* Account for user time used */
+    acct_account_cputime(p);
 
-#ifdef CONFIG_CPU_FREQ_STAT
-	/* Account power usage for system time */
-	cpufreq_acct_update_power(p, cputime);
-#endif
+    /* Account power usage for user time */
+    cpufreq_acct_update_power(p, cputime);
 }
 
 /*
@@ -177,24 +173,24 @@ void account_user_time(struct task_struct *p, cputime_t cputime,
  * @cputime_scaled: cputime scaled by cpu frequency
  */
 static void account_guest_time(struct task_struct *p, cputime_t cputime,
-			       cputime_t cputime_scaled)
+                               cputime_t cputime_scaled)
 {
-	u64 *cpustat = kcpustat_this_cpu->cpustat;
+    u64 *cpustat = kcpustat_this_cpu->cpustat;
 
-	/* Add guest time to process. */
-	p->utime += cputime;
-	p->utimescaled += cputime_scaled;
-	account_group_user_time(p, cputime);
-	p->gtime += cputime;
+    /* Add guest time to process. */
+    p->utime += cputime;
+    p->utimescaled += cputime_scaled;
+    account_group_user_time(p, cputime);
+    p->gtime += cputime;
 
-	/* Add guest time to cpustat. */
-	if (task_nice(p) > 0) {
-		cpustat[CPUTIME_NICE] += (__force u64) cputime;
-		cpustat[CPUTIME_GUEST_NICE] += (__force u64) cputime;
-	} else {
-		cpustat[CPUTIME_USER] += (__force u64) cputime;
-		cpustat[CPUTIME_GUEST] += (__force u64) cputime;
-	}
+    /* Add guest time to cpustat. */
+    if (task_nice(p) > 0) {
+        cpustat[CPUTIME_NICE] += (__force u64) cputime;
+        cpustat[CPUTIME_GUEST_NICE] += (__force u64) cputime;
+    } else {
+        cpustat[CPUTIME_USER] += (__force u64) cputime;
+        cpustat[CPUTIME_GUEST] += (__force u64) cputime;
+    }
 }
 
 /*
@@ -206,23 +202,21 @@ static void account_guest_time(struct task_struct *p, cputime_t cputime,
  */
 static inline
 void __account_system_time(struct task_struct *p, cputime_t cputime,
-			cputime_t cputime_scaled, int index)
+                           cputime_t cputime_scaled, int index)
 {
-	/* Add system time to process. */
-	p->stime += cputime;
-	p->stimescaled += cputime_scaled;
-	account_group_system_time(p, cputime);
+    /* Add system time to process. */
+    p->stime += cputime;
+    p->stimescaled += cputime_scaled;
+    account_group_system_time(p, cputime);
 
-	/* Add system time to cpustat. */
-	task_group_account_field(p, index, (__force u64) cputime);
+    /* Add system time to cpustat. */
+    task_group_account_field(p, index, (__force u64) cputime);
 
-	/* Account for system time used */
-	acct_account_cputime(p);
+    /* Account for system time used */
+    acct_account_cputime(p);
 
-#ifdef CONFIG_CPU_FREQ_STAT
-	/* Account power usage for system time */
-	cpufreq_acct_update_power(p, cputime);
-#endif
+    /* Account power usage for system time */
+    cpufreq_acct_update_power(p, cputime);
 }
 
 /*
@@ -233,23 +227,23 @@ void __account_system_time(struct task_struct *p, cputime_t cputime,
  * @cputime_scaled: cputime scaled by cpu frequency
  */
 void account_system_time(struct task_struct *p, int hardirq_offset,
-			 cputime_t cputime, cputime_t cputime_scaled)
+                         cputime_t cputime, cputime_t cputime_scaled)
 {
-	int index;
+    int index;
 
-	if ((p->flags & PF_VCPU) && (irq_count() - hardirq_offset == 0)) {
-		account_guest_time(p, cputime, cputime_scaled);
-		return;
-	}
+    if ((p->flags & PF_VCPU) && (irq_count() - hardirq_offset == 0)) {
+        account_guest_time(p, cputime, cputime_scaled);
+        return;
+    }
 
-	if (hardirq_count() - hardirq_offset)
-		index = CPUTIME_IRQ;
-	else if (in_serving_softirq())
-		index = CPUTIME_SOFTIRQ;
-	else
-		index = CPUTIME_SYSTEM;
+    if (hardirq_count() - hardirq_offset)
+        index = CPUTIME_IRQ;
+    else if (in_serving_softirq())
+        index = CPUTIME_SOFTIRQ;
+    else
+        index = CPUTIME_SYSTEM;
 
-	__account_system_time(p, cputime, cputime_scaled, index);
+    __account_system_time(p, cputime, cputime_scaled, index);
 }
 
 /*
@@ -258,9 +252,9 @@ void account_system_time(struct task_struct *p, int hardirq_offset,
  */
 void account_steal_time(cputime_t cputime)
 {
-	u64 *cpustat = kcpustat_this_cpu->cpustat;
+    u64 *cpustat = kcpustat_this_cpu->cpustat;
 
-	cpustat[CPUTIME_STEAL] += (__force u64) cputime;
+    cpustat[CPUTIME_STEAL] += (__force u64) cputime;
 }
 
 /*
@@ -269,19 +263,19 @@ void account_steal_time(cputime_t cputime)
  */
 void account_idle_time(cputime_t cputime)
 {
-	u64 *cpustat = kcpustat_this_cpu->cpustat;
-	struct rq *rq = this_rq();
+    u64 *cpustat = kcpustat_this_cpu->cpustat;
+    struct rq *rq = this_rq();
 
-	if (atomic_read(&rq->nr_iowait) > 0)
-		cpustat[CPUTIME_IOWAIT] += (__force u64) cputime;
-	else
-		cpustat[CPUTIME_IDLE] += (__force u64) cputime;
+    if (atomic_read(&rq->nr_iowait) > 0)
+        cpustat[CPUTIME_IOWAIT] += (__force u64) cputime;
+    else
+    cpustat[CPUTIME_IDLE] += (__force u64) cputime;
 }
 
 static __always_inline bool steal_account_process_tick(void)
 {
 #ifdef CONFIG_PARAVIRT
-	if (static_key_false(&paravirt_steal_enabled)) {
+    if (static_key_false(&paravirt_steal_enabled)) {
 		u64 steal;
 		unsigned long steal_jiffies;
 
@@ -300,7 +294,7 @@ static __always_inline bool steal_account_process_tick(void)
 		return steal_jiffies;
 	}
 #endif
-	return false;
+    return false;
 }
 
 /*
@@ -309,33 +303,33 @@ static __always_inline bool steal_account_process_tick(void)
  */
 void thread_group_cputime(struct task_struct *tsk, struct task_cputime *times)
 {
-	struct signal_struct *sig = tsk->signal;
-	cputime_t utime, stime;
-	struct task_struct *t;
-	unsigned int seq, nextseq;
-	unsigned long flags;
+    struct signal_struct *sig = tsk->signal;
+    cputime_t utime, stime;
+    struct task_struct *t;
+    unsigned int seq, nextseq;
+    unsigned long flags;
 
-	rcu_read_lock();
-	/* Attempt a lockless read on the first round. */
-	nextseq = 0;
-	do {
-		seq = nextseq;
-		flags = read_seqbegin_or_lock_irqsave(&sig->stats_lock, &seq);
-		times->utime = sig->utime;
-		times->stime = sig->stime;
-		times->sum_exec_runtime = sig->sum_sched_runtime;
+    rcu_read_lock();
+    /* Attempt a lockless read on the first round. */
+    nextseq = 0;
+    do {
+        seq = nextseq;
+        flags = read_seqbegin_or_lock_irqsave(&sig->stats_lock, &seq);
+        times->utime = sig->utime;
+        times->stime = sig->stime;
+        times->sum_exec_runtime = sig->sum_sched_runtime;
 
-		for_each_thread(tsk, t) {
-			task_cputime(t, &utime, &stime);
-			times->utime += utime;
-			times->stime += stime;
-			times->sum_exec_runtime += task_sched_runtime(t);
-		}
-		/* If lockless access failed, take the lock. */
-		nextseq = 1;
-	} while (need_seqretry(&sig->stats_lock, seq));
-	done_seqretry_irqrestore(&sig->stats_lock, seq, flags);
-	rcu_read_unlock();
+        for_each_thread(tsk, t) {
+            task_cputime(t, &utime, &stime);
+            times->utime += utime;
+            times->stime += stime;
+            times->sum_exec_runtime += task_sched_runtime(t);
+        }
+        /* If lockless access failed, take the lock. */
+        nextseq = 1;
+    } while (need_seqretry(&sig->stats_lock, seq));
+    done_seqretry_irqrestore(&sig->stats_lock, seq, flags);
+    rcu_read_unlock();
 }
 
 #ifdef CONFIG_IRQ_TIME_ACCOUNTING
@@ -404,7 +398,7 @@ static void irqtime_account_idle_ticks(int ticks)
 #else /* CONFIG_IRQ_TIME_ACCOUNTING */
 static inline void irqtime_account_idle_ticks(int ticks) {}
 static inline void irqtime_account_process_tick(struct task_struct *p, int user_tick,
-						struct rq *rq, int nr_ticks) {}
+                                                struct rq *rq, int nr_ticks) {}
 #endif /* CONFIG_IRQ_TIME_ACCOUNTING */
 
 /*
@@ -487,27 +481,27 @@ void thread_group_cputime_adjusted(struct task_struct *p, cputime_t *ut, cputime
  */
 void account_process_tick(struct task_struct *p, int user_tick)
 {
-	cputime_t one_jiffy_scaled = cputime_to_scaled(cputime_one_jiffy);
-	struct rq *rq = this_rq();
+    cputime_t one_jiffy_scaled = cputime_to_scaled(cputime_one_jiffy);
+    struct rq *rq = this_rq();
 
-	if (vtime_accounting_enabled())
-		return;
+    if (vtime_accounting_enabled())
+        return;
 
-	if (sched_clock_irqtime) {
-		irqtime_account_process_tick(p, user_tick, rq, 1);
-		return;
-	}
+    if (sched_clock_irqtime) {
+        irqtime_account_process_tick(p, user_tick, rq, 1);
+        return;
+    }
 
-	if (steal_account_process_tick())
-		return;
+    if (steal_account_process_tick())
+        return;
 
-	if (user_tick)
-		account_user_time(p, cputime_one_jiffy, one_jiffy_scaled);
-	else if ((p != rq->idle) || (irq_count() != HARDIRQ_OFFSET))
-		account_system_time(p, HARDIRQ_OFFSET, cputime_one_jiffy,
-				    one_jiffy_scaled);
-	else
-		account_idle_time(cputime_one_jiffy);
+    if (user_tick)
+        account_user_time(p, cputime_one_jiffy, one_jiffy_scaled);
+    else if ((p != rq->idle) || (irq_count() != HARDIRQ_OFFSET))
+        account_system_time(p, HARDIRQ_OFFSET, cputime_one_jiffy,
+                            one_jiffy_scaled);
+    else
+        account_idle_time(cputime_one_jiffy);
 }
 
 /*
@@ -517,7 +511,7 @@ void account_process_tick(struct task_struct *p, int user_tick)
  */
 void account_steal_ticks(unsigned long ticks)
 {
-	account_steal_time(jiffies_to_cputime(ticks));
+    account_steal_time(jiffies_to_cputime(ticks));
 }
 
 /*
@@ -527,12 +521,12 @@ void account_steal_ticks(unsigned long ticks)
 void account_idle_ticks(unsigned long ticks)
 {
 
-	if (sched_clock_irqtime) {
-		irqtime_account_idle_ticks(ticks);
-		return;
-	}
+    if (sched_clock_irqtime) {
+        irqtime_account_idle_ticks(ticks);
+        return;
+    }
 
-	account_idle_time(jiffies_to_cputime(ticks));
+    account_idle_time(jiffies_to_cputime(ticks));
 }
 
 /*
@@ -541,42 +535,42 @@ void account_idle_ticks(unsigned long ticks)
  */
 static cputime_t scale_stime(u64 stime, u64 rtime, u64 total)
 {
-	u64 scaled;
+    u64 scaled;
 
-	for (;;) {
-		/* Make sure "rtime" is the bigger of stime/rtime */
-		if (stime > rtime)
-			swap(rtime, stime);
+    for (;;) {
+        /* Make sure "rtime" is the bigger of stime/rtime */
+        if (stime > rtime)
+            swap(rtime, stime);
 
-		/* Make sure 'total' fits in 32 bits */
-		if (total >> 32)
-			goto drop_precision;
+        /* Make sure 'total' fits in 32 bits */
+        if (total >> 32)
+            goto drop_precision;
 
-		/* Does rtime (and thus stime) fit in 32 bits? */
-		if (!(rtime >> 32))
-			break;
+        /* Does rtime (and thus stime) fit in 32 bits? */
+        if (!(rtime >> 32))
+            break;
 
-		/* Can we just balance rtime/stime rather than dropping bits? */
-		if (stime >> 31)
-			goto drop_precision;
+        /* Can we just balance rtime/stime rather than dropping bits? */
+        if (stime >> 31)
+            goto drop_precision;
 
-		/* We can grow stime and shrink rtime and try to make them both fit */
-		stime <<= 1;
-		rtime >>= 1;
-		continue;
+        /* We can grow stime and shrink rtime and try to make them both fit */
+        stime <<= 1;
+        rtime >>= 1;
+        continue;
 
-drop_precision:
-		/* We drop from rtime, it has more bits than stime */
-		rtime >>= 1;
-		total >>= 1;
-	}
+        drop_precision:
+        /* We drop from rtime, it has more bits than stime */
+        rtime >>= 1;
+        total >>= 1;
+    }
 
-	/*
-	 * Make sure gcc understands that this is a 32x32->64 multiply,
-	 * followed by a 64/32->64 divide.
-	 */
-	scaled = div_u64((u64) (u32) stime * (u64) (u32) rtime, (u32)total);
-	return (__force cputime_t) scaled;
+    /*
+     * Make sure gcc understands that this is a 32x32->64 multiply,
+     * followed by a 64/32->64 divide.
+     */
+    scaled = div_u64((u64) (u32) stime * (u64) (u32) rtime, (u32)total);
+    return (__force cputime_t) scaled;
 }
 
 /*
@@ -600,96 +594,96 @@ drop_precision:
  * Assuming that rtime_i+1 >= rtime_i.
  */
 static void cputime_adjust(struct task_cputime *curr,
-			   struct prev_cputime *prev,
-			   cputime_t *ut, cputime_t *st)
+                           struct prev_cputime *prev,
+                           cputime_t *ut, cputime_t *st)
 {
-	cputime_t rtime, stime, utime;
-	unsigned long flags;
+    cputime_t rtime, stime, utime;
+    unsigned long flags;
 
-	/* Serialize concurrent callers such that we can honour our guarantees */
-	raw_spin_lock_irqsave(&prev->lock, flags);
-	rtime = nsecs_to_cputime(curr->sum_exec_runtime);
+    /* Serialize concurrent callers such that we can honour our guarantees */
+    raw_spin_lock_irqsave(&prev->lock, flags);
+    rtime = nsecs_to_cputime(curr->sum_exec_runtime);
 
-	/*
-	 * This is possible under two circumstances:
-	 *  - rtime isn't monotonic after all (a bug);
-	 *  - we got reordered by the lock.
-	 *
-	 * In both cases this acts as a filter such that the rest of the code
-	 * can assume it is monotonic regardless of anything else.
-	 */
-	if (prev->stime + prev->utime >= rtime)
-		goto out;
+    /*
+     * This is possible under two circumstances:
+     *  - rtime isn't monotonic after all (a bug);
+     *  - we got reordered by the lock.
+     *
+     * In both cases this acts as a filter such that the rest of the code
+     * can assume it is monotonic regardless of anything else.
+     */
+    if (prev->stime + prev->utime >= rtime)
+        goto out;
 
-	stime = curr->stime;
-	utime = curr->utime;
+    stime = curr->stime;
+    utime = curr->utime;
 
-	/*
-	 * If either stime or both stime and utime are 0, assume all runtime is
-	 * userspace. Once a task gets some ticks, the monotonicy code at
-	 * 'update' will ensure things converge to the observed ratio.
-	 */
-	if (stime == 0) {
-		utime = rtime;
-		goto update;
-	}
+    /*
+     * If either stime or both stime and utime are 0, assume all runtime is
+     * userspace. Once a task gets some ticks, the monotonicy code at
+     * 'update' will ensure things converge to the observed ratio.
+     */
+    if (stime == 0) {
+        utime = rtime;
+        goto update;
+    }
 
-	if (utime == 0) {
-		stime = rtime;
-		goto update;
-	}
+    if (utime == 0) {
+        stime = rtime;
+        goto update;
+    }
 
-	stime = scale_stime((__force u64)stime, (__force u64)rtime,
-			    (__force u64)(stime + utime));
+    stime = scale_stime((__force u64)stime, (__force u64)rtime,
+            (__force u64)(stime + utime));
 
-update:
-	/*
-	 * Make sure stime doesn't go backwards; this preserves monotonicity
-	 * for utime because rtime is monotonic.
-	 *
-	 *  utime_i+1 = rtime_i+1 - stime_i
-	 *            = rtime_i+1 - (rtime_i - utime_i)
-	 *            = (rtime_i+1 - rtime_i) + utime_i
-	 *            >= utime_i
-	 */
-	if (stime < prev->stime)
-		stime = prev->stime;
-	utime = rtime - stime;
+    update:
+    /*
+     * Make sure stime doesn't go backwards; this preserves monotonicity
+     * for utime because rtime is monotonic.
+     *
+     *  utime_i+1 = rtime_i+1 - stime_i
+     *            = rtime_i+1 - (rtime_i - utime_i)
+     *            = (rtime_i+1 - rtime_i) + utime_i
+     *            >= utime_i
+     */
+    if (stime < prev->stime)
+        stime = prev->stime;
+    utime = rtime - stime;
 
-	/*
-	 * Make sure utime doesn't go backwards; this still preserves
-	 * monotonicity for stime, analogous argument to above.
-	 */
-	if (utime < prev->utime) {
-		utime = prev->utime;
-		stime = rtime - utime;
-	}
+    /*
+     * Make sure utime doesn't go backwards; this still preserves
+     * monotonicity for stime, analogous argument to above.
+     */
+    if (utime < prev->utime) {
+        utime = prev->utime;
+        stime = rtime - utime;
+    }
 
-	prev->stime = stime;
-	prev->utime = utime;
-out:
-	*ut = prev->utime;
-	*st = prev->stime;
-	raw_spin_unlock_irqrestore(&prev->lock, flags);
+    prev->stime = stime;
+    prev->utime = utime;
+    out:
+    *ut = prev->utime;
+    *st = prev->stime;
+    raw_spin_unlock_irqrestore(&prev->lock, flags);
 }
 
 void task_cputime_adjusted(struct task_struct *p, cputime_t *ut, cputime_t *st)
 {
-	struct task_cputime cputime = {
-		.sum_exec_runtime = p->se.sum_exec_runtime,
-	};
+    struct task_cputime cputime = {
+            .sum_exec_runtime = p->se.sum_exec_runtime,
+    };
 
-	task_cputime(p, &cputime.utime, &cputime.stime);
-	cputime_adjust(&cputime, &p->prev_cputime, ut, st);
+    task_cputime(p, &cputime.utime, &cputime.stime);
+    cputime_adjust(&cputime, &p->prev_cputime, ut, st);
 }
 EXPORT_SYMBOL_GPL(task_cputime_adjusted);
 
 void thread_group_cputime_adjusted(struct task_struct *p, cputime_t *ut, cputime_t *st)
 {
-	struct task_cputime cputime;
+    struct task_cputime cputime;
 
-	thread_group_cputime(p, &cputime);
-	cputime_adjust(&cputime, &p->signal->prev_cputime, ut, st);
+    thread_group_cputime(p, &cputime);
+    cputime_adjust(&cputime, &p->signal->prev_cputime, ut, st);
 }
 #endif /* !CONFIG_VIRT_CPU_ACCOUNTING_NATIVE */
 

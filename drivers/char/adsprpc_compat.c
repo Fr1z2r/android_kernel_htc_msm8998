@@ -362,19 +362,6 @@ static int compat_get_fastrpc_ioctl_control(
 	return err;
 }
 
-static int compat_get_fastrpc_ioctl_control(
-			struct compat_fastrpc_ioctl_control __user *ctrl32,
-			struct fastrpc_ioctl_control __user *ctrl)
-{
-	compat_uptr_t p;
-	int err;
-
-	err = get_user(p, &ctrl32->req);
-	err |= put_user(p, &ctrl->req);
-
-	return err;
-}
-
 static int compat_get_fastrpc_ioctl_init(
 			struct compat_fastrpc_ioctl_init_attrs __user *init32,
 			struct fastrpc_ioctl_init_attrs __user *init,

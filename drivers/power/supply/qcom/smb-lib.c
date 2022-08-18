@@ -2601,21 +2601,6 @@ int smblib_dp_dm(struct smb_charger *chg, int val)
 		if (rc < 0)
 			pr_err("Failed to force 12V\n");
 		break;
-	case POWER_SUPPLY_DP_DM_FORCE_5V:
-		rc = smblib_force_vbus_voltage(chg, FORCE_5V_BIT);
-		if (rc < 0)
-			pr_err("Failed to force 5V\n");
-		break;
-	case POWER_SUPPLY_DP_DM_FORCE_9V:
-		rc = smblib_force_vbus_voltage(chg, FORCE_9V_BIT);
-		if (rc < 0)
-			pr_err("Failed to force 9V\n");
-		break;
-	case POWER_SUPPLY_DP_DM_FORCE_12V:
-		rc = smblib_force_vbus_voltage(chg, FORCE_12V_BIT);
-		if (rc < 0)
-			pr_err("Failed to force 12V\n");
-		break;
 	case POWER_SUPPLY_DP_DM_ICL_UP:
 	default:
 		break;
@@ -4415,32 +4400,6 @@ static void smblib_force_legacy_icl(struct smb_charger *chg, int pst)
 		break;
 #endif // CONFIG_HTC_BATT
 	}
-}
-
-static void smblib_notify_extcon_props(struct smb_charger *chg)
-{
-	union power_supply_propval val;
-
-	smblib_get_prop_typec_cc_orientation(chg, &val);
-	extcon_set_cable_state_(chg->extcon, EXTCON_USB_CC,
-					(val.intval == 2) ? 1 : 0);
-	extcon_set_cable_state_(chg->extcon, EXTCON_USB_SPEED, true);
-}
-
-static void smblib_notify_device_mode(struct smb_charger *chg, bool enable)
-{
-	if (enable)
-		smblib_notify_extcon_props(chg);
-
-	extcon_set_cable_state_(chg->extcon, EXTCON_USB, enable);
-}
-
-static void smblib_notify_usb_host(struct smb_charger *chg, bool enable)
-{
-	if (enable)
-		smblib_notify_extcon_props(chg);
-
-	extcon_set_cable_state_(chg->extcon, EXTCON_USB_HOST, enable);
 }
 
 static void smblib_notify_extcon_props(struct smb_charger *chg)

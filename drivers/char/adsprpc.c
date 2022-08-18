@@ -72,7 +72,7 @@
 #define FASTRPC_CTX_MAGIC (0xbeeddeed)
 #define FASTRPC_CTX_MAX (256)
 #define FASTRPC_CTXID_MASK (0xFF0)
-#define NUM_DEVICES   2 /* adsprpc-smd, adsprpc-smd-secure */
+//#define NUM_DEVICES   2 /* adsprpc-smd, adsprpc-smd-secure */
 #define MINOR_NUM_DEV 0
 #define MINOR_NUM_SECURE_DEV 1
 #define NON_SECURE_CHANNEL 0
@@ -2738,7 +2738,6 @@ static ssize_t fastrpc_debugfs_read(struct file *filp, char __user *buffer,
 	struct fastrpc_apps *me = &gfa;
 	struct fastrpc_file *fl = filp->private_data;
 	struct hlist_node *n;
-	struct fastrpc_buf *buf = NULL;
 	struct fastrpc_mmap *map = NULL;
 	struct fastrpc_mmap *gmaps = NULL;
 	struct smq_invoke_ctx *ictx = NULL;
@@ -3579,23 +3578,6 @@ static void configure_secure_channels(uint32_t secure_domains)
 }
 #endif
 
-static void configure_secure_channels(uint32_t secure_domains)
-{
-	struct fastrpc_apps *me = &gfa;
-	int ii = 0;
-	/*
-	 * secure_domains contains the bitmask of the secure channels
-	 *  Bit 0 - ADSP
-	 *  Bit 1 - MDSP
-	 *  Bit 2 - SLPI
-	 *  Bit 3 - CDSP
-	 */
-	for (ii = ADSP_DOMAIN_ID; ii <= CDSP_DOMAIN_ID; ++ii) {
-		int secure = (secure_domains >> ii) & 0x01;
-
-		me->channel[ii].secure = secure;
-	}
-}
 
 static int fastrpc_probe(struct platform_device *pdev)
 {

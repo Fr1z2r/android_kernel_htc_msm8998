@@ -1719,35 +1719,6 @@ done:
 	return ret;
 }
 
-static int msm_compr_unmap_ion_fd(struct msm_compr_audio *prtd)
-{
-	ion_phys_addr_t paddr;
-	size_t pa_len = 0;
-	int ret = 0;
-
-	if (!prtd->lib_ion_client || !prtd->lib_ion_handle) {
-		pr_err("%s: ion_client or ion_handle is NULL", __func__);
-		return -EINVAL;
-	}
-
-	ret = msm_audio_ion_phys_free(prtd->lib_ion_client,
-				      prtd->lib_ion_handle,
-				      &paddr, &pa_len, ADSP_TO_HLOS);
-	if (ret) {
-		pr_err("%s: audio lib ION phys failed, rc = %d\n",
-			__func__, ret);
-		goto done;
-	}
-
-	ret = q6core_add_remove_pool_pages(paddr, pa_len,
-				 ADSP_MEMORY_MAP_HLOS_PHYSPOOL, false);
-	if (ret)
-		pr_err("%s: add remove pages failed, rc = %d\n", __func__, ret);
-
-done:
-	return ret;
-}
-
 static int msm_compr_playback_open(struct snd_compr_stream *cstream)
 {
 	struct snd_compr_runtime *runtime = cstream->runtime;
@@ -2314,12 +2285,6 @@ static int msm_compr_set_params(struct snd_compr_stream *cstream,
 	case SND_AUDIOCODEC_APTX: {
 		pr_debug("%s: SND_AUDIOCODEC_APTX\n", __func__);
 		prtd->codec = FORMAT_APTX;
-		break;
-	}
-
-        case SND_AUDIOCODEC_APTXHD: {
-		pr_debug("%s: SND_AUDIOCODEC_APTXHD\n", __func__);
-		prtd->codec = FORMAT_APTXHD;
 		break;
 	}
 
@@ -4535,16 +4500,6 @@ static int msm_compr_channel_map_info(struct snd_kcontrol *kcontrol,
 {
 	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
 	uinfo->count = 8;
-	uinfo->value.integer.min = 0;
-	uinfo->value.integer.max = 0xFFFFFFFF;
-	return 0;
-}
-
-static int msm_compr_device_downmix_info(struct snd_kcontrol *kcontrol,
-	struct snd_ctl_elem_info *uinfo)
-{
-	uinfo->type = SNDRV_CTL_ELEM_TYPE_INTEGER;
-	uinfo->count = 128;
 	uinfo->value.integer.min = 0;
 	uinfo->value.integer.max = 0xFFFFFFFF;
 	return 0;
