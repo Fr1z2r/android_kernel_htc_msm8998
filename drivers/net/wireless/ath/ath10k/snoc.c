@@ -1153,10 +1153,14 @@ static int ath10k_snoc_hif_power_up(struct ath10k *ar)
 		atomic_set(&ar_snoc->pm_ops_inprogress, 0);
 	}
 
-	ret = ath10k_snoc_bus_configure(ar);
-	if (ret) {
-		ath10k_err(ar, "failed to configure bus: %d\n", ret);
-		return ret;
+	if ((ar->state == ATH10K_STATE_ON) ||
+	    (ar->state == ATH10K_STATE_RESTARTING) ||
+	    test_bit(ATH10K_FLAG_CRASH_FLUSH, &ar->dev_flags)) {
+		ret = ath10k_snoc_bus_configure(ar);
+		if (ret) {
+			ath10k_err(ar, "failed to configure bus: %d\n", ret);
+			return ret;
+		}
 	}
 
 	ret = ath10k_snoc_init_pipes(ar);
@@ -1635,6 +1639,7 @@ static int ath10k_snoc_probe(struct platform_device *pdev)
 	enum ath10k_hw_rev hw_rev;
 	struct device *dev;
 	u32 i;
+	u32 i;
 
 	dev = &pdev->dev;
 	hw_rev = ATH10K_HW_WCN3990;
@@ -1687,6 +1692,12 @@ static int ath10k_snoc_probe(struct platform_device *pdev)
 	if (ret) {
 		ath10k_err(ar, "failed to power on device: %d\n", ret);
 		goto err_stop_qmi_service;
+	}
+
+	ret = ath10k_snoc_claim(ar);
+	if (ret) {
+		ath10k_err(ar, "failed to power on device: %d\n", ret);
+		goto err_hw_power_off;
 	}
 
 	ret = ath10k_snoc_claim(ar);

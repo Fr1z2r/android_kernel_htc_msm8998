@@ -1,4 +1,4 @@
-/* Copyright (c) 2015-2016, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2015-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -383,17 +383,37 @@ struct ipa_api_controller {
 		int ipa_ep_idx_dl);
 
 	struct device *(*ipa_get_pdev)(void);
+
+	int (*ipa_ntn_uc_reg_rdyCB)(void (*ipauc_ready_cb)(void *user_data),
+		void *user_data);
+
+	void (*ipa_ntn_uc_dereg_rdyCB)(void);
 };
 
 #ifdef CONFIG_IPA
 int ipa_plat_drv_probe(struct platform_device *pdev_p,
 	struct ipa_api_controller *api_ctrl, struct of_device_id *pdrv_match);
+int ipa_plat_drv_shutdown(struct platform_device *pdev_p,
+	struct ipa_api_controller *api_ctrl,
+	const struct of_device_id *pdrv_match);
+void ipa_platform_shutdown(void);
 #else
 static inline int ipa_plat_drv_probe(struct platform_device *pdev_p,
 	struct ipa_api_controller *api_ctrl, struct of_device_id *pdrv_match)
 {
 	return -ENODEV;
 }
+static inline int ipa_plat_drv_shutdown(struct platform_device *pdev_p,
+	struct ipa_api_controller *api_ctrl,
+	const struct of_device_id *pdrv_match)
+{
+	return -ENODEV;
+}
+static inline int ipa_platform_shutdown(void)
+{
+	return -ENODEV;
+}
+
 #endif /* (CONFIG_IPA) */
 
 #ifdef CONFIG_IPA3

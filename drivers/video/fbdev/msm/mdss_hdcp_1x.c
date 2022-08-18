@@ -1,4 +1,4 @@
-/* Copyright (c) 2010-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2010-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -890,6 +890,107 @@ exit:
 	return rc;
 }
 
+static u8 *hdcp_1x_swap_byte_order(u8 *bksv_in, int num_dev)
+{
+	u8 *bksv_out;
+	u8 *tmp_out;
+	u8 *tmp_in;
+	int i, j;
+
+	/* Dont exceed max downstream devices */
+	if (num_dev > MAX_DEVICES_SUPPORTED) {
+		pr_err("invalid params\n");
+		return NULL;
+	}
+
+	bksv_out = kzalloc(RECV_ID_SIZE * num_dev, GFP_KERNEL);
+
+	if (!bksv_out)
+		return NULL;
+
+	pr_debug("num_dev = %d\n", num_dev);
+
+	/* Store temporarily for return */
+	tmp_out = bksv_out;
+	tmp_in = bksv_in;
+
+	for (i = 0; i < num_dev; i++) {
+		for (j = 0; j < RECV_ID_SIZE; j++)
+			bksv_out[j] = tmp_in[RECV_ID_SIZE - j - 1];
+
+		/* Each KSV is 5 bytes long */
+		bksv_out += RECV_ID_SIZE;
+		tmp_in += RECV_ID_SIZE;
+	}
+
+	return tmp_out;
+}
+
+static int hdcp_1x_revoked_rcv_chk(struct hdcp_1x *hdcp)
+{
+	int rc = 0;
+	u8 *bksv = hdcp->current_tp.bksv;
+	u8 *bksv_out;
+	struct hdcp_srm_device_id_t *bksv_srm;
+
+	bksv_out = hdcp_1x_swap_byte_order(bksv, 1);
+
+	if (!bksv_out) {
+		rc = -ENOMEM;
+		goto exit;
+	}
+
+	pr_debug("bksv_out : 0x%2x%2x%2x%2x%2x\n",
+		bksv_out[4], bksv_out[3], bksv_out[2],
+		bksv_out[1], bksv_out[0]);
+
+	bksv_srm = (struct hdcp_srm_device_id_t *)bksv_out;
+	/* Here we are checking only receiver ID
+	 * hence the device count is one
+	 */
+	rc = hdcp1_validate_receiver_ids(bksv_srm, 1);
+
+	kfree(bksv_out);
+
+exit:
+	return rc;
+}
+
+static int hdcp_1x_revoked_rpt_chk(struct hdcp_1x *hdcp)
+{
+	int rc = 0;
+	int i;
+	u8 *bksv = hdcp->current_tp.ksv_list;
+	u8 *bksv_out;
+	struct hdcp_srm_device_id_t *bksv_srm;
+
+	for (i = 0; i < hdcp->sink_addr.ksv_fifo.len;
+		 i += RECV_ID_SIZE) {
+		pr_debug("bksv : 0x%2x%2x%2x%2x%2x\n",
+		bksv[i + 4],
+		bksv[i + 3], bksv[i + 2],
+		bksv[i + 1], bksv[i]);
+	}
+
+	bksv_out = hdcp_1x_swap_byte_order(bksv,
+		hdcp->current_tp.dev_count);
+
+	if (!bksv_out) {
+		rc = -ENOMEM;
+		goto exit;
+	}
+
+	bksv_srm = (struct hdcp_srm_device_id_t *)bksv_out;
+	/* Here we are checking repeater ksv list */
+	rc = hdcp1_validate_receiver_ids(bksv_srm,
+			hdcp->current_tp.dev_count);
+
+	kfree(bksv_out);
+
+exit:
+	return rc;
+}
+
 static void hdcp_1x_enable_sink_irq_hpd(struct hdcp_1x *hdcp)
 {
 	int rc;
@@ -1348,15 +1449,15 @@ static int hdcp_1x_authentication_part2(struct hdcp_1x *hdcp)
 	}
 
 	do {
-		rc = hdcp_1x_transfer_v_h(hdcp);
-		if (rc)
-			goto error;
-
 		/* do not proceed further if no device connected */
 		if (!hdcp->current_tp.dev_count) {
 			rc = -EINVAL;
 			goto error;
 		}
+
+		rc = hdcp_1x_transfer_v_h(hdcp);
+		if (rc)
+			goto error;
 
 		rc = hdcp_1x_write_ksv_fifo(hdcp);
 	} while (--v_retry && rc);

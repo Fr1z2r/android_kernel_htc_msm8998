@@ -205,8 +205,10 @@ int dpcm_dapm_stream_event(struct snd_soc_pcm_runtime *fe, int dir,
 				be->dai_link->name, event, dir);
 
 		if ((event == SND_SOC_DAPM_STREAM_STOP) &&
-		    (be->dpcm[dir].users >= 1))
+		    (be->dpcm[dir].users >= 1)) {
+			pr_debug("%s Don't close BE \n", __func__);
 			continue;
+		}
 
 		snd_soc_dapm_stream_event(be, dir, event);
 	}
@@ -1653,7 +1655,7 @@ static void dpcm_init_runtime_hw(struct snd_pcm_runtime *runtime,
 				 u64 formats)
 {
 	runtime->hw.rate_min = stream->rate_min;
-	runtime->hw.rate_max = stream->rate_max;
+	runtime->hw.rate_max = min_not_zero(stream->rate_max, UINT_MAX);
 	runtime->hw.channels_min = stream->channels_min;
 	runtime->hw.channels_max = stream->channels_max;
 	if (runtime->hw.formats)

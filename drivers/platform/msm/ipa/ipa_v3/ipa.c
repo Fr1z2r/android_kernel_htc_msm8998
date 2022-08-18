@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -155,6 +155,9 @@
 				compat_uptr_t)
 #define IPA_IOC_V4_DEL_NAT32 _IOWR(IPA_IOC_MAGIC, \
 				IPA_IOCTL_V4_DEL_NAT, \
+				compat_uptr_t)
+#define IPA_IOC_DEL_NAT_TABLE32 _IOWR(IPA_IOC_MAGIC, \
+				IPA_IOCTL_DEL_NAT_TABLE, \
 				compat_uptr_t)
 #define IPA_IOC_DEL_NAT_TABLE32 _IOWR(IPA_IOC_MAGIC, \
 				IPA_IOCTL_DEL_NAT_TABLE, \
@@ -639,11 +642,13 @@ static void ipa3_wan_msg_free_cb(void *buff, u32 len, u32 type)
 	kfree(buff);
 }
 
-static int ipa3_send_wan_msg(unsigned long usr_param, uint8_t msg_type)
+static int ipa3_send_wan_msg(unsigned long usr_param, uint8_t msg_type,
+								bool is_cache)
 {
 	int retval;
 	struct ipa_wan_msg *wan_msg;
 	struct ipa_msg_meta msg_meta;
+	struct ipa_wan_msg cache_wan_msg;
 
 	wan_msg = kzalloc(sizeof(struct ipa_wan_msg), GFP_KERNEL);
 	if (!wan_msg) {
@@ -657,6 +662,8 @@ static int ipa3_send_wan_msg(unsigned long usr_param, uint8_t msg_type)
 		return -EFAULT;
 	}
 
+	memcpy(&cache_wan_msg, wan_msg, sizeof(cache_wan_msg));
+
 	memset(&msg_meta, 0, sizeof(struct ipa_msg_meta));
 	msg_meta.msg_type = msg_type;
 	msg_meta.msg_len = sizeof(struct ipa_wan_msg);
@@ -667,9 +674,112 @@ static int ipa3_send_wan_msg(unsigned long usr_param, uint8_t msg_type)
 		return retval;
 	}
 
+	if (is_cache) {
+		mutex_lock(&ipa3_ctx->ipa_cne_evt_lock);
+
+		/* cache the cne event */
+		memcpy(&ipa3_ctx->ipa_cne_evt_req_cache[
+			ipa3_ctx->num_ipa_cne_evt_req].wan_msg,
+			&cache_wan_msg,
+			sizeof(cache_wan_msg));
+
+		memcpy(&ipa3_ctx->ipa_cne_evt_req_cache[
+			ipa3_ctx->num_ipa_cne_evt_req].msg_meta,
+			&msg_meta,
+			sizeof(struct ipa_msg_meta));
+
+		ipa3_ctx->num_ipa_cne_evt_req++;
+		ipa3_ctx->num_ipa_cne_evt_req %= IPA_MAX_NUM_REQ_CACHE;
+		mutex_unlock(&ipa3_ctx->ipa_cne_evt_lock);
+	}
+
 	return 0;
 }
 
+static void ipa3_vlan_l2tp_msg_free_cb(void *buff, u32 len, u32 type)
+{
+	if (!buff) {
+		IPAERR("Null buffer\n");
+		return;
+	}
+
+	if (type != ADD_VLAN_IFACE &&
+	    type != DEL_VLAN_IFACE &&
+	    type != ADD_L2TP_VLAN_MAPPING &&
+		type != DEL_L2TP_VLAN_MAPPING) {
+		IPAERR("Wrong type given. buff %pK type %d\n", buff, type);
+		return;
+	}
+
+	kfree(buff);
+}
+
+static int ipa3_send_vlan_l2tp_msg(unsigned long usr_param, uint8_t msg_type)
+{
+	int retval;
+	struct ipa_ioc_vlan_iface_info *vlan_info;
+	struct ipa_ioc_l2tp_vlan_mapping_info *mapping_info;
+	struct ipa_msg_meta msg_meta;
+
+	if (msg_type == ADD_VLAN_IFACE ||
+		msg_type == DEL_VLAN_IFACE) {
+		vlan_info = kzalloc(sizeof(struct ipa_ioc_vlan_iface_info),
+			GFP_KERNEL);
+		if (!vlan_info) {
+			IPAERR("no memory\n");
+			return -ENOMEM;
+		}
+
+		if (copy_from_user((u8 *)vlan_info, (void __user *)usr_param,
+			sizeof(struct ipa_ioc_vlan_iface_info))) {
+			kfree(vlan_info);
+			return -EFAULT;
+		}
+
+		memset(&msg_meta, 0, sizeof(msg_meta));
+		msg_meta.msg_type = msg_type;
+		msg_meta.msg_len = sizeof(struct ipa_ioc_vlan_iface_info);
+		retval = ipa3_send_msg(&msg_meta, vlan_info,
+			ipa3_vlan_l2tp_msg_free_cb);
+		if (retval) {
+			IPAERR("ipa3_send_msg failed: %d\n", retval);
+			kfree(vlan_info);
+			return retval;
+		}
+	} else if (msg_type == ADD_L2TP_VLAN_MAPPING ||
+		msg_type == DEL_L2TP_VLAN_MAPPING) {
+		mapping_info = kzalloc(sizeof(struct
+			ipa_ioc_l2tp_vlan_mapping_info), GFP_KERNEL);
+		if (!mapping_info) {
+			IPAERR("no memory\n");
+			return -ENOMEM;
+		}
+
+		if (copy_from_user((u8 *)mapping_info,
+			(void __user *)usr_param,
+			sizeof(struct ipa_ioc_l2tp_vlan_mapping_info))) {
+			kfree(mapping_info);
+			return -EFAULT;
+		}
+
+		memset(&msg_meta, 0, sizeof(msg_meta));
+		msg_meta.msg_type = msg_type;
+		msg_meta.msg_len = sizeof(struct
+			ipa_ioc_l2tp_vlan_mapping_info);
+		retval = ipa3_send_msg(&msg_meta, mapping_info,
+			ipa3_vlan_l2tp_msg_free_cb);
+		if (retval) {
+			IPAERR("ipa3_send_msg failed: %d\n", retval);
+			kfree(mapping_info);
+			return retval;
+		}
+	} else {
+		IPAERR("Unexpected event\n");
+		return -EFAULT;
+	}
+
+	return 0;
+}
 
 static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 {
@@ -932,8 +1042,52 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 			break;
 		}
 		break;
+
+	case IPA_IOC_ADD_RT_RULE_EXT:
+		if (copy_from_user(header,
+				(const void __user *)arg,
+				sizeof(struct ipa_ioc_add_rt_rule_ext))) {
+			retval = -EFAULT;
+			break;
+		}
+		pre_entry =
+			((struct ipa_ioc_add_rt_rule_ext *)header)->num_rules;
+		pyld_sz =
+		   sizeof(struct ipa_ioc_add_rt_rule_ext) +
+		   pre_entry * sizeof(struct ipa_rt_rule_add_ext);
+		param = kzalloc(pyld_sz, GFP_KERNEL);
+		if (!param) {
+			retval = -ENOMEM;
+			break;
+		}
+		if (copy_from_user(param, (const void __user *)arg,
+				pyld_sz)) {
+			retval = -EFAULT;
+			break;
+		}
+		/* add check in case user-space module compromised */
+		if (unlikely(
+			((struct ipa_ioc_add_rt_rule_ext *)param)->num_rules
+			!= pre_entry)) {
+			IPAERR(" prevent memory corruption(%d not match %d)\n",
+				((struct ipa_ioc_add_rt_rule_ext *)param)->
+				num_rules,
+				pre_entry);
+			retval = -EINVAL;
+			break;
+		}
+		if (ipa3_add_rt_rule_ext(
+			(struct ipa_ioc_add_rt_rule_ext *)param)) {
+			retval = -EFAULT;
+			break;
+		}
+		if (copy_to_user((void __user *)arg, param, pyld_sz)) {
+			retval = -EFAULT;
+			break;
+		}
+		break;
 	case IPA_IOC_ADD_RT_RULE_AFTER:
-		if (copy_from_user(header, (u8 *)arg,
+		if (copy_from_user(header, (const void __user *)arg,
 			sizeof(struct ipa_ioc_add_rt_rule_after))) {
 
 			retval = -EFAULT;
@@ -1563,21 +1717,21 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 		break;
 	case IPA_IOC_NOTIFY_WAN_UPSTREAM_ROUTE_ADD:
-		retval = ipa3_send_wan_msg(arg, WAN_UPSTREAM_ROUTE_ADD);
+		retval = ipa3_send_wan_msg(arg, WAN_UPSTREAM_ROUTE_ADD, true);
 		if (retval) {
 			IPAERR("ipa3_send_wan_msg failed: %d\n", retval);
 			break;
 		}
 		break;
 	case IPA_IOC_NOTIFY_WAN_UPSTREAM_ROUTE_DEL:
-		retval = ipa3_send_wan_msg(arg, WAN_UPSTREAM_ROUTE_DEL);
+		retval = ipa3_send_wan_msg(arg, WAN_UPSTREAM_ROUTE_DEL, true);
 		if (retval) {
 			IPAERR("ipa3_send_wan_msg failed: %d\n", retval);
 			break;
 		}
 		break;
 	case IPA_IOC_NOTIFY_WAN_EMBMS_CONNECTED:
-		retval = ipa3_send_wan_msg(arg, WAN_EMBMS_CONNECT);
+		retval = ipa3_send_wan_msg(arg, WAN_EMBMS_CONNECT, false);
 		if (retval) {
 			IPAERR("ipa3_send_wan_msg failed: %d\n", retval);
 			break;
@@ -1673,6 +1827,34 @@ static long ipa3_ioctl(struct file *filp, unsigned int cmd, unsigned long arg)
 		}
 		memcpy(param, &ipa3_ctx->ipa_hw_type, pyld_sz);
 		if (copy_to_user((u8 *)arg, param, pyld_sz)) {
+			retval = -EFAULT;
+			break;
+		}
+		break;
+
+	case IPA_IOC_ADD_VLAN_IFACE:
+		if (ipa3_send_vlan_l2tp_msg(arg, ADD_VLAN_IFACE)) {
+			retval = -EFAULT;
+			break;
+		}
+		break;
+
+	case IPA_IOC_DEL_VLAN_IFACE:
+		if (ipa3_send_vlan_l2tp_msg(arg, DEL_VLAN_IFACE)) {
+			retval = -EFAULT;
+			break;
+		}
+		break;
+
+	case IPA_IOC_ADD_L2TP_VLAN_MAPPING:
+		if (ipa3_send_vlan_l2tp_msg(arg, ADD_L2TP_VLAN_MAPPING)) {
+			retval = -EFAULT;
+			break;
+		}
+		break;
+
+	case IPA_IOC_DEL_L2TP_VLAN_MAPPING:
+		if (ipa3_send_vlan_l2tp_msg(arg, DEL_L2TP_VLAN_MAPPING)) {
 			retval = -EFAULT;
 			break;
 		}
@@ -3224,6 +3406,9 @@ ret:
 	case IPA_IOC_DEL_NAT_TABLE32:
 		cmd = IPA_IOC_DEL_NAT_TABLE;
 		break;
+	case IPA_IOC_DEL_NAT_TABLE32:
+		cmd = IPA_IOC_DEL_NAT_TABLE;
+		break;
 	case IPA_IOC_GET_NAT_OFFSET32:
 		cmd = IPA_IOC_GET_NAT_OFFSET;
 		break;
@@ -4223,12 +4408,12 @@ static void ipa3_post_init_wq(struct work_struct *work)
 	ipa3_post_init(&ipa3_res, ipa3_ctx->dev);
 }
 
-static int ipa3_trigger_fw_loading_mdms(void)
+static int ipa3_manual_load_ipa_fws(void)
 {
 	int result;
 	const struct firmware *fw;
 
-	IPADBG("FW loading process initiated\n");
+	IPADBG("Manual FW loading process initiated\n");
 
 	result = request_firmware(&fw, IPA_FWS_PATH, ipa3_ctx->dev);
 	if (result < 0) {
@@ -4244,7 +4429,7 @@ static int ipa3_trigger_fw_loading_mdms(void)
 
 	result = ipa3_load_fws(fw, ipa3_res.transport_mem_base);
 	if (result) {
-		IPAERR("IPA FWs loading has failed\n");
+		IPAERR("Manual IPA FWs loading has failed\n");
 		release_firmware(fw);
 		return result;
 	}
@@ -4259,15 +4444,15 @@ static int ipa3_trigger_fw_loading_mdms(void)
 
 	release_firmware(fw);
 
-	IPADBG("FW loading process is complete\n");
+	IPADBG("Manual FW loading process is complete\n");
 	return 0;
 }
 
-static int ipa3_trigger_fw_loading_msms(void)
+static int ipa3_pil_load_ipa_fws(void)
 {
 	void *subsystem_get_retval = NULL;
 
-	IPADBG("FW loading process initiated\n");
+	IPADBG("PIL FW loading process initiated\n");
 
 	subsystem_get_retval = subsystem_get(IPA_SUBSYSTEM_NAME);
 	if (IS_ERR_OR_NULL(subsystem_get_retval)) {
@@ -4275,7 +4460,7 @@ static int ipa3_trigger_fw_loading_msms(void)
 		return -EINVAL;
 	}
 
-	IPADBG("FW loading process is complete\n");
+	IPADBG("PIL FW loading process is complete\n");
 	return 0;
 }
 
@@ -4314,31 +4499,40 @@ static ssize_t ipa3_write(struct file *file, const char __user *buf,
 	 * We will trigger the process only if we're in GSI mode, otherwise,
 	 * we just ignore the write.
 	 */
-	if (ipa3_ctx->transport_prototype == IPA_TRANSPORT_TYPE_GSI) {
-		IPA_ACTIVE_CLIENTS_INC_SIMPLE();
+	if (ipa3_ctx->transport_prototype != IPA_TRANSPORT_TYPE_GSI)
+		return count;
 
-		if (ipa3_is_msm_device())
-			result = ipa3_trigger_fw_loading_msms();
-		else
-			result = ipa3_trigger_fw_loading_mdms();
-		/* No IPAv3.x chipsets that don't support FW loading */
+	/* Prevent multiple calls from trying to load the FW again. */
+	if (ipa3_ctx->fw_loaded) {
+		IPAERR("not load FW again\n");
+		return count;
+	}
 
-		IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
+	/* Schedule WQ to load ipa-fws */
+	ipa3_ctx->fw_loaded = true;
 
-		if (result) {
-			IPAERR("FW loading process has failed\n");
-			//HTC_RIL_START
+	IPA_ACTIVE_CLIENTS_INC_SIMPLE();
+
+	if (ipa3_is_msm_device() || (ipa3_ctx->ipa_hw_type >= IPA_HW_v3_5))
+		result = ipa3_pil_load_ipa_fws();
+	else
+		result = ipa3_manual_load_ipa_fws();
+
+	IPA_ACTIVE_CLIENTS_DEC_SIMPLE();
+
+	if (result) {
+		IPAERR("IPA FW loading process has failed\n");
+		//HTC_RIL_START
 			if (ipa_load_wq) {
 				queue_delayed_work(ipa_load_wq, &ipa_loader_work, msecs_to_jiffies(500));
 				return result;
 			}
                         //HTC_RIL_END
 				return result;
-		} else {
-			queue_work(ipa3_ctx->transport_power_mgmt_wq,
-				&ipa3_post_init_work);
 		}
-	}
+	queue_work(ipa3_ctx->transport_power_mgmt_wq,
+		&ipa3_post_init_work);
+	IPADBG("IPA FW loaded successfully\n");
 	return count;
 }
 
@@ -4475,7 +4669,7 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 
 	ipa3_ctx->logbuf = ipc_log_context_create(IPA_IPC_LOG_PAGES, "ipa", 0);
 	if (ipa3_ctx->logbuf == NULL)
-		IPAERR("failed to create IPC log, continue...\n");
+		IPADBG("failed to create IPC log, continue...\n");
 
 	ipa3_ctx->pdev = ipa_dev;
 	ipa3_ctx->uc_pdev = ipa_dev;
@@ -4820,6 +5014,7 @@ static int ipa3_pre_init(const struct ipa3_plat_drv_res *resource_p,
 	mutex_init(&ipa3_ctx->lock);
 	mutex_init(&ipa3_ctx->nat_mem.lock);
 	mutex_init(&ipa3_ctx->q6_proxy_clk_vote_mutex);
+	mutex_init(&ipa3_ctx->ipa_cne_evt_lock);
 	ipa3_ctx->q6_proxy_clk_vote_cnt = 0;
 
 	idr_init(&ipa3_ctx->ipa_idr);
@@ -5645,6 +5840,10 @@ static int ipa3_smp2p_probe(struct device *dev)
 	struct device_node *node = dev->of_node;
 	int res;
 
+	if (ipa3_ctx == NULL) {
+		IPAERR("ipa3_ctx was not initialized\n");
+		return -ENXIO;
+	}
 	IPADBG("node->name=%s\n", node->name);
 	if (strcmp("qcom,smp2pgpio_map_ipa_1_out", node->name) == 0) {
 		res = of_get_gpio(node, 0);
