@@ -106,7 +106,7 @@
 #define SND_AUDIOCODEC_APTX                  ((__u32) 0x00000022)
 #define SND_AUDIOCODEC_TRUEHD                ((__u32) 0x00000023)
 #define SND_AUDIOCODEC_APTXHD                ((__u32) 0x00000024)
-#define SND_AUDIOCODEC_MAX                   SND_AUDIOCODEC_TRUEHD
+#define SND_AUDIOCODEC_MAX                   SND_AUDIOCODEC_APTXHD
 /*
  * Profile and modes are listed with bit masks. This allows for a
  * more compact representation of fields that will not evolve

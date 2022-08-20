@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2019, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -51,7 +51,7 @@ static int ipa3_generate_flt_hw_rule(enum ipa_ip_type ip,
 	memset(&gen_params, 0, sizeof(gen_params));
 
 	gen_params.ipt = ip;
-	if (entry->rt_tbl)
+	if (entry->rt_tbl && (!ipa3_check_idr_if_freed(entry->rt_tbl)))
 		gen_params.rt_tbl_idx = entry->rt_tbl->idx;
 	else
 		gen_params.rt_tbl_idx = entry->rule.rt_tbl_idx;
@@ -1190,7 +1190,7 @@ int ipa3_add_flt_rule_after(struct ipa_ioc_add_flt_rule_after *rules)
 	}
 
 	if (entry->cookie != IPA_FLT_COOKIE) {
-		IPAERR_RL("Invalid cookie value =  %u rule = %d in rt tbls\n",
+		IPAERR_RL("Invalid cookie value =  %u flt hdl id = %d\n",
 			entry->cookie, rules->add_after_hdl);
 		result = -EINVAL;
 		goto bail;
@@ -1401,7 +1401,9 @@ int ipa3_reset_flt(enum ipa_ip_type ip, bool user_only)
 					entry->ipacm_installed) {
 				list_del(&entry->link);
 				entry->tbl->rule_cnt--;
-				if (entry->rt_tbl)
+				if (entry->rt_tbl &&
+					(!ipa3_check_idr_if_freed(
+						entry->rt_tbl)))
 					entry->rt_tbl->ref_cnt--;
 				/* if rule id was allocated from idr, remove */
 				rule_id = entry->rule_id;
@@ -1419,8 +1421,16 @@ int ipa3_reset_flt(enum ipa_ip_type ip, bool user_only)
 			}
 		}
 	}
-	mutex_unlock(&ipa3_ctx->lock);
 
+	/* commit the change to IPA-HW */
+	if (ipa3_ctx->ctrl->ipa3_commit_flt(IPA_IP_v4) ||
+		ipa3_ctx->ctrl->ipa3_commit_flt(IPA_IP_v6)) {
+		IPAERR("fail to commit flt-rule\n");
+		WARN_ON_RATELIMIT_IPA(1);
+		mutex_unlock(&ipa3_ctx->lock);
+		return -EPERM;
+	}
+	mutex_unlock(&ipa3_ctx->lock);
 	return 0;
 }
 

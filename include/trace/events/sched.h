@@ -436,9 +436,9 @@ TRACE_EVENT(sched_update_task_ravg,
 
 TRACE_EVENT(sched_get_task_cpu_cycles,
 
-	TP_PROTO(int cpu, int event, u64 cycles, u64 exec_time),
+	TP_PROTO(int cpu, int event, u64 cycles, u64 exec_time, struct task_struct *p),
 
-	TP_ARGS(cpu, event, cycles, exec_time),
+	TP_ARGS(cpu, event, cycles, exec_time, p),
 
 	TP_STRUCT__entry(
 		__field(int,		cpu		)
@@ -448,6 +448,8 @@ TRACE_EVENT(sched_get_task_cpu_cycles,
 		__field(u32,		freq		)
 		__field(u32,		legacy_freq	)
 		__field(u32,		max_freq)
+		__field(pid_t,		pid		)
+		__array(char,	comm,   TASK_COMM_LEN	)
 	),
 
 	TP_fast_assign(
@@ -458,12 +460,14 @@ TRACE_EVENT(sched_get_task_cpu_cycles,
 		__entry->freq		= cpu_cycles_to_freq(cycles, exec_time);
 		__entry->legacy_freq 	= cpu_cur_freq(cpu);
 		__entry->max_freq	= cpu_max_freq(cpu);
+		__entry->pid            = p->pid;
+		memcpy(__entry->comm, p->comm, TASK_COMM_LEN);
 	),
 
-	TP_printk("cpu=%d event=%d cycles=%llu exec_time=%llu freq=%u legacy_freq=%u max_freq=%u",
+	TP_printk("cpu=%d event=%d cycles=%llu exec_time=%llu freq=%u legacy_freq=%u max_freq=%u task=%d (%s)",
 		__entry->cpu, __entry->event, __entry->cycles,
 		__entry->exec_time, __entry->freq, __entry->legacy_freq,
-		__entry->max_freq)
+		__entry->max_freq, __entry->pid, __entry->comm)
 );
 
 TRACE_EVENT(sched_update_history,
@@ -1432,6 +1436,38 @@ TRACE_EVENT(sched_isolate,
 		  __entry->time, __entry->isolate)
 );
 
+TRACE_EVENT(sched_preempt_disable,
+
+	TP_PROTO(u64 delta, bool irqs_disabled,
+			unsigned long caddr0, unsigned long caddr1,
+			unsigned long caddr2, unsigned long caddr3),
+
+	TP_ARGS(delta, irqs_disabled, caddr0, caddr1, caddr2, caddr3),
+
+	TP_STRUCT__entry(
+		__field(u64, delta)
+		__field(bool, irqs_disabled)
+		__field(void*, caddr0)
+		__field(void*, caddr1)
+		__field(void*, caddr2)
+		__field(void*, caddr3)
+	),
+
+	TP_fast_assign(
+		__entry->delta = delta;
+		__entry->irqs_disabled = irqs_disabled;
+		__entry->caddr0 = (void *)caddr0;
+		__entry->caddr1 = (void *)caddr1;
+		__entry->caddr2 = (void *)caddr2;
+		__entry->caddr3 = (void *)caddr3;
+	),
+
+	TP_printk("delta=%llu(ns) irqs_d=%d Callers:(%pf<-%pf<-%pf<-%pf)",
+				__entry->delta, __entry->irqs_disabled,
+				__entry->caddr0, __entry->caddr1,
+				__entry->caddr2, __entry->caddr3)
+);
+
 TRACE_EVENT(sched_contrib_scale_f,
 
 	TP_PROTO(int cpu, unsigned long freq_scale_factor,
@@ -1462,7 +1498,7 @@ TRACE_EVENT(sched_contrib_scale_f,
 extern unsigned int sysctl_sched_use_walt_cpu_util;
 extern unsigned int sysctl_sched_use_walt_task_util;
 extern unsigned int walt_ravg_window;
-extern unsigned int walt_disabled;
+extern bool walt_disabled;
 #endif
 
 /*
@@ -1544,9 +1580,9 @@ TRACE_EVENT(sched_load_avg_cpu,
 		__entry->util_avg_pelt	= cfs_rq->avg.util_avg;
 		__entry->util_avg_walt	= 0;
 #ifdef CONFIG_SCHED_WALT
-		__entry->util_avg_walt	=
-				cpu_rq(cpu)->prev_runnable_sum << SCHED_LOAD_SHIFT;
-		do_div(__entry->util_avg_walt, walt_ravg_window);
+		__entry->util_avg_walt =
+				div64_u64(cpu_rq(cpu)->cumulative_runnable_avg,
+						  walt_ravg_window >> SCHED_LOAD_SHIFT);
 		if (!walt_disabled && sysctl_sched_use_walt_cpu_util)
 			__entry->util_avg		= __entry->util_avg_walt;
 #endif
@@ -1695,6 +1731,48 @@ TRACE_EVENT(sched_boost_task,
 		  __entry->comm, __entry->pid,
 		  __entry->util,
 		  __entry->margin)
+);
+
+/*
+ * Tracepoint for find_best_target
+ */
+TRACE_EVENT(sched_find_best_target,
+
+	TP_PROTO(struct task_struct *tsk, bool prefer_idle,
+		unsigned long min_util, int start_cpu,
+		int best_idle, int best_active, int target),
+
+	TP_ARGS(tsk, prefer_idle, min_util, start_cpu,
+		best_idle, best_active, target),
+
+	TP_STRUCT__entry(
+		__array( char,	comm,	TASK_COMM_LEN	)
+		__field( pid_t,	pid			)
+		__field( unsigned long,	min_util	)
+		__field( bool,	prefer_idle		)
+		__field( int,	start_cpu		)
+		__field( int,	best_idle		)
+		__field( int,	best_active		)
+		__field( int,	target			)
+	),
+
+	TP_fast_assign(
+		memcpy(__entry->comm, tsk->comm, TASK_COMM_LEN);
+		__entry->pid		= tsk->pid;
+		__entry->min_util	= min_util;
+		__entry->prefer_idle	= prefer_idle;
+		__entry->start_cpu 	= start_cpu;
+		__entry->best_idle	= best_idle;
+		__entry->best_active	= best_active;
+		__entry->target		= target;
+	),
+
+	TP_printk("pid=%d comm=%s prefer_idle=%d start_cpu=%d "
+		  "best_idle=%d best_active=%d target=%d",
+		__entry->pid, __entry->comm,
+		__entry->prefer_idle, __entry->start_cpu,
+		__entry->best_idle, __entry->best_active,
+		__entry->target)
 );
 
 /*

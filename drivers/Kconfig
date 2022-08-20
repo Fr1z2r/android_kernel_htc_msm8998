@@ -222,4 +222,6 @@ source "drivers/htc_radio/Kconfig"
 
 source "drivers/gud/Kconfig"
 
+source "drivers/tee/Kconfig"
+
 endmenu

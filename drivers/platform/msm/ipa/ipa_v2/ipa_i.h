@@ -1,4 +1,4 @@
-/* Copyright (c) 2012-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2012-2018, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -64,6 +64,8 @@
 #define IPA_MAX_STATUS_STAT_NUM 30
 
 #define IPA_IPC_LOG_PAGES 50
+
+#define IPA_MAX_NUM_REQ_CACHE 10
 
 #define IPADBG(fmt, args...) \
 	do { \
@@ -1008,6 +1010,11 @@ struct ipacm_client_info {
 	bool uplink;
 };
 
+struct ipa_cne_evt {
+	struct ipa_wan_msg wan_msg;
+	struct ipa_msg_meta msg_meta;
+};
+
 /**
  * struct ipa_context - IPA context
  * @class: pointer to the struct class
@@ -1098,6 +1105,8 @@ struct ipa_context {
 	struct cdev cdev;
 	unsigned long bam_handle;
 	struct ipa_ep_context ep[IPA_MAX_NUM_PIPES];
+	void __iomem *ipa_non_ap_bam_s_desc_iova[IPA_MAX_NUM_PIPES];
+	void __iomem *ipa_non_ap_bam_p_desc_iova[IPA_MAX_NUM_PIPES];
 	bool skip_ep_cfg_shadow[IPA_MAX_NUM_PIPES];
 	bool resume_on_connect[IPA_CLIENT_MAX];
 	struct ipa_flt_tbl flt_tbl[IPA_MAX_NUM_PIPES][IPA_IP_MAX];
@@ -1211,6 +1220,11 @@ struct ipa_context {
 	u32 ipa_rx_max_timeout_usec;
 	u32 ipa_polling_iteration;
 	bool ipa_uc_monitor_holb;
+	struct ipa_cne_evt ipa_cne_evt_req_cache[IPA_MAX_NUM_REQ_CACHE];
+	int num_ipa_cne_evt_req;
+	struct mutex ipa_cne_evt_lock;
+	int (*q6_cleanup_cb)(void);
+	bool is_apps_shutdown_support;
 };
 
 /**
@@ -1267,6 +1281,7 @@ struct ipa_plat_drv_res {
 	u32 ipa_rx_polling_sleep_msec;
 	u32 ipa_polling_iteration;
 	bool ipa_uc_monitor_holb;
+	bool is_apps_shutdown_support;
 };
 
 struct ipa_mem_partition {
@@ -1391,6 +1406,8 @@ int ipa2_disconnect(u32 clnt_hdl);
  * Resume / Suspend
  */
 int ipa2_reset_endpoint(u32 clnt_hdl);
+
+void ipa2_apps_shutdown_apps_ep_reset(void);
 
 /*
  * Remove ep delay
@@ -1590,6 +1607,8 @@ int ipa2_setup_uc_ntn_pipes(struct ipa_ntn_conn_in_params *inp,
 		ipa_notify_cb notify, void *priv, u8 hdr_len,
 		struct ipa_ntn_conn_out_params *outp);
 int ipa2_tear_down_uc_offload_pipes(int ipa_ep_idx_ul, int ipa_ep_idx_dl);
+int ipa2_ntn_uc_reg_rdyCB(void (*ipauc_ready_cb)(void *), void *priv);
+void ipa2_ntn_uc_dereg_rdyCB(void);
 
 /*
  * To retrieve doorbell physical address of
@@ -1793,7 +1812,7 @@ static inline u32 ipa_read_reg_field(void *base, u32 offset,
 	return (ipa_read_reg(base, offset) & mask) >> shift;
 }
 
-static inline void ipa_write_reg(void *base, u32 offset, u32 val)
+static inline void ipa_write_reg(void __iomem *base, u32 offset, u32 val)
 {
 	iowrite32(val, base + offset);
 }
@@ -1880,7 +1899,12 @@ int ipa_tag_process(struct ipa_desc *desc, int num_descs,
 		    unsigned long timeout);
 
 int ipa_q6_pre_shutdown_cleanup(void);
+int ipa_apps_shutdown_cleanup(void);
+int register_ipa_platform_cb(int (*cb)(void));
 int ipa_q6_post_shutdown_cleanup(void);
+int wait_for_ep_empty(enum ipa_client_type client);
+int ioremap_non_ap_bam_regs(void);
+void iounmap_non_ap_bam_regs(void);
 int ipa_init_q6_smem(void);
 int ipa_q6_monitor_holb_mitigation(bool enable);
 

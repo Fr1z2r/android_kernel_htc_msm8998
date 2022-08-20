@@ -7,7 +7,6 @@
 #include <linux/types.h>
 #endif
 #include <linux/fb.h>
-#include <linux/minifb.h>
 
 #define MSMFB_IOCTL_MAGIC 'm'
 #define MSMFB_GRP_DISP          _IOW(MSMFB_IOCTL_MAGIC, 1, unsigned int)

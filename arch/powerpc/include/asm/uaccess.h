@@ -391,7 +391,6 @@ static inline unsigned long __copy_from_user_inatomic(void *to,
 
 	check_object_size(to, n, false);
 
-
 	barrier_nospec();
 	return __copy_tofrom_user((__force void __user *)to, from, n);
 }

@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2015,2017 The Linux Foundation. All rights reserved.
+ * Copyright (c) 2015,2017-2018 The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -595,7 +595,7 @@ static inline enum dsi_cmd_dst_format dsi_get_cmd_fmt(
 	switch (mipi_fmt) {
 	case MIPI_DSI_FMT_RGB888:	return CMD_DST_FORMAT_RGB888;
 	case MIPI_DSI_FMT_RGB666_PACKED:
-	case MIPI_DSI_FMT_RGB666:	return VID_DST_FORMAT_RGB666;
+	case MIPI_DSI_FMT_RGB666:	return CMD_DST_FORMAT_RGB666;
 	case MIPI_DSI_FMT_RGB565:	return CMD_DST_FORMAT_RGB565;
 	default:			return CMD_DST_FORMAT_RGB888;
 	}
@@ -898,7 +898,7 @@ static int dsi_cmd_dma_add(struct drm_gem_object *tx_gem,
 
 	data = msm_gem_vaddr(tx_gem);
 
-	if (IS_ERR(data)) {
+	if (IS_ERR_OR_NULL(data)) {
 		ret = PTR_ERR(data);
 		pr_err("%s: get vaddr failed, %d\n", __func__, ret);
 		return ret;
@@ -1006,7 +1006,7 @@ static int dsi_cmd_dma_rx(struct msm_dsi_host *msm_host,
 	u32 *lp, *temp, data;
 	int i, j = 0, cnt;
 	u32 read_cnt;
-	u8 reg[16];
+	u8 reg[16] = {0};
 	int repeated_bytes = 0;
 	int buf_offset = buf - msm_host->rx_buf;
 

@@ -733,7 +733,7 @@ static int snd_compr_drain(struct snd_compr_stream *stream)
 	default:
 		break;
 	}
-    mutex_unlock(&stream->device->lock);
+	mutex_unlock(&stream->device->lock);
 
 	retval = stream->ops->trigger(stream, SND_COMPR_TRIGGER_DRAIN);
 	mutex_lock(&stream->device->lock);
@@ -787,7 +787,7 @@ static int snd_compr_partial_drain(struct snd_compr_stream *stream)
 	default:
 		break;
 	}
-    mutex_unlock(&stream->device->lock);
+	mutex_unlock(&stream->device->lock);
 
 	/* stream can be drained only when next track has been signalled */
 	if (stream->next_track == false)
@@ -1008,6 +1008,8 @@ static const struct file_operations snd_compr_file_ops = {
 		.unlocked_ioctl = snd_compr_ioctl,
 #ifdef CONFIG_COMPAT
 		.compat_ioctl = snd_compr_ioctl_compat,
+#else
+		.compat_ioctl   = snd_compr_ioctl,
 #endif
 		.compat_ioctl   = snd_compr_ioctl,
 		.mmap =           snd_compr_mmap,

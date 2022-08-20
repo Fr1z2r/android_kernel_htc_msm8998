@@ -1,4 +1,4 @@
-/* Copyright (c) 2016-2017, The Linux Foundation. All rights reserved.
+/* Copyright (c) 2016-2020, The Linux Foundation. All rights reserved.
  *
  * This program is free software; you can redistribute it and/or modify
  * it under the terms of the GNU General Public License version 2 and
@@ -40,6 +40,8 @@
 #define ESR_PULSE_THRESH_OFFSET		3
 #define SLOPE_LIMIT_WORD		3
 #define SLOPE_LIMIT_OFFSET		0
+#define CUTOFF_CURR_WORD		4
+#define CUTOFF_CURR_OFFSET		0
 #define CUTOFF_VOLT_WORD		5
 #define CUTOFF_VOLT_OFFSET		0
 #define SYS_TERM_CURR_WORD		6
@@ -213,6 +215,8 @@ static struct fg_sram_param pmi8998_v1_sram_params[] = {
 		1000000, 122070, 0, fg_encode_current, NULL),
 	PARAM(CHG_TERM_CURR, CHG_TERM_CURR_WORD, CHG_TERM_CURR_OFFSET, 1,
 		100000, 390625, 0, fg_encode_current, NULL),
+	PARAM(CUTOFF_CURR, CUTOFF_CURR_WORD, CUTOFF_CURR_OFFSET, 3,
+		1000000, 122070, 0, fg_encode_current, NULL),
 	PARAM(DELTA_MSOC_THR, DELTA_MSOC_THR_WORD, DELTA_MSOC_THR_OFFSET, 1,
 		2048, 100, 0, fg_encode_default, NULL),
 	PARAM(DELTA_BSOC_THR, DELTA_BSOC_THR_WORD, DELTA_BSOC_THR_OFFSET, 1,
@@ -289,6 +293,8 @@ static struct fg_sram_param pmi8998_v2_sram_params[] = {
 	PARAM(CHG_TERM_BASE_CURR, CHG_TERM_CURR_v2_WORD,
 		CHG_TERM_BASE_CURR_v2_OFFSET, 1, 1024, 1000, 0,
 		fg_encode_current, NULL),
+	PARAM(CUTOFF_CURR, CUTOFF_CURR_WORD, CUTOFF_CURR_OFFSET, 3,
+		1000000, 122070, 0, fg_encode_current, NULL),
 	PARAM(DELTA_MSOC_THR, DELTA_MSOC_THR_v2_WORD, DELTA_MSOC_THR_v2_OFFSET,
 		1, 2048, 100, 0, fg_encode_default, NULL),
 	PARAM(DELTA_BSOC_THR, DELTA_BSOC_THR_v2_WORD, DELTA_BSOC_THR_v2_OFFSET,
@@ -596,6 +602,41 @@ static int fg_get_charge_counter(struct fg_chip *chip, int *val)
 	return 0;
 }
 
+static int fg_get_jeita_threshold(struct fg_chip *chip,
+				enum jeita_levels level, int *temp_decidegC)
+{
+	int rc;
+	u8 val;
+	u16 reg;
+
+	switch (level) {
+	case JEITA_COLD:
+		reg = BATT_INFO_JEITA_TOO_COLD(chip);
+		break;
+	case JEITA_COOL:
+		reg = BATT_INFO_JEITA_COLD(chip);
+		break;
+	case JEITA_WARM:
+		reg = BATT_INFO_JEITA_HOT(chip);
+		break;
+	case JEITA_HOT:
+		reg = BATT_INFO_JEITA_TOO_HOT(chip);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	rc = fg_read(chip, reg, &val, 1);
+	if (rc < 0) {
+		pr_err("Error in reading jeita level %d, rc=%d\n", level, rc);
+		return rc;
+	}
+
+	/* Resolution is 0.5C. Base is -30C. */
+	*temp_decidegC = (((5 * val) / 10) - 30) * 10;
+	return 0;
+}
+
 #define BATT_TEMP_NUMR		1
 #define BATT_TEMP_DENR		1
 static int fg_get_battery_temp(struct fg_chip *chip, int *val)
@@ -732,7 +773,19 @@ static int fg_get_msoc(struct fg_chip *chip, int *msoc)
 	if (rc < 0)
 		return rc;
 
-	*msoc = DIV_ROUND_CLOSEST(*msoc * FULL_CAPACITY, FULL_SOC_RAW);
+	/*
+	 * To have better endpoints for 0 and 100, it is good to tune the
+	 * calculation discarding values 0 and 255 while rounding off. Rest
+	 * of the values 1-254 will be scaled to 1-99. DIV_ROUND_UP will not
+	 * be suitable here as it rounds up any value higher than 252 to 100.
+	 */
+	if (*msoc == FULL_SOC_RAW)
+		*msoc = 100;
+	else if (*msoc == 0)
+		*msoc = 0;
+	else
+		*msoc = DIV_ROUND_CLOSEST((*msoc - 1) * (FULL_CAPACITY - 2),
+				FULL_SOC_RAW - 2) + 1;
 	return 0;
 }
 
@@ -996,12 +1049,6 @@ static int fg_get_batt_profile(struct fg_chip *chip)
 	memcpy(chip->batt_profile, data, len);
 
 	return 0;
-}
-
-static inline void get_temp_setpoint(int threshold, u8 *val)
-{
-	/* Resolution is 0.5C. Base is -30C. */
-	*val = DIV_ROUND_CLOSEST((threshold + 30) * 10, 5);
 }
 
 static inline void get_batt_temp_delta(int delta, u8 *val)
@@ -1512,6 +1559,9 @@ static void fg_cap_learning_update(struct fg_chip *chip)
 		goto out;
 	}
 
+	if (chip->charge_status == chip->prev_charge_status)
+		goto out;
+
 	rc = fg_get_sram_prop(chip, FG_SRAM_BATT_SOC, &batt_soc);
 	if (rc < 0) {
 		pr_err("Error in getting ACT_BATT_CAP, rc=%d\n", rc);
@@ -1533,7 +1583,6 @@ static void fg_cap_learning_update(struct fg_chip *chip)
 					chip->charge_done)
 				prime_cc = true;
 		}
-
 	} else {
 		if (chip->charge_done) {
 			rc = fg_cap_learning_done(chip);
@@ -1745,116 +1794,117 @@ static int fg_configure_full_soc(struct fg_chip *chip, int bsoc)
 #define AUTO_RECHG_VOLT_LOW_LIMIT_MV	3700
 static int fg_charge_full_update(struct fg_chip *chip)
 {
-	union power_supply_propval prop = {0, };
-	int rc, msoc, bsoc, recharge_soc, msoc_raw;
+    union power_supply_propval prop = {0, };
+    int rc, msoc, bsoc, recharge_soc, msoc_raw;
 
-	if (!chip->dt.hold_soc_while_full)
-		return 0;
+    if (!chip->dt.hold_soc_while_full)
+        return 0;
 
-	if (!batt_psy_initialized(chip))
-		return 0;
+    if (!batt_psy_initialized(chip))
+        return 0;
 
-	mutex_lock(&chip->charge_full_lock);
-	vote(chip->delta_bsoc_irq_en_votable, DELTA_BSOC_IRQ_VOTER,
-		chip->charge_done, 0);
-	rc = power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_HEALTH,
-		&prop);
-	if (rc < 0) {
-		pr_err("Error in getting battery health, rc=%d\n", rc);
-		goto out;
-	}
+    mutex_lock(&chip->charge_full_lock);
+    vote(chip->delta_bsoc_irq_en_votable, DELTA_BSOC_IRQ_VOTER,
+         chip->charge_done, 0);
+    rc = power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_HEALTH,
+                                   &prop);
+    if (rc < 0) {
+        pr_err("Error in getting battery health, rc=%d\n", rc);
+        goto out;
+    }
 
-	chip->health = prop.intval;
-	recharge_soc = chip->dt.recharge_soc_thr;
-	recharge_soc = DIV_ROUND_CLOSEST(recharge_soc * FULL_SOC_RAW,
-				FULL_CAPACITY);
-	rc = fg_get_sram_prop(chip, FG_SRAM_BATT_SOC, &bsoc);
-	if (rc < 0) {
-		pr_err("Error in getting BATT_SOC, rc=%d\n", rc);
-		goto out;
-	}
+    chip->health = prop.intval;
+    recharge_soc = chip->dt.recharge_soc_thr;
+    recharge_soc = DIV_ROUND_CLOSEST(recharge_soc * FULL_SOC_RAW,
+                                     FULL_CAPACITY);
+    rc = fg_get_sram_prop(chip, FG_SRAM_BATT_SOC, &bsoc);
+    if (rc < 0) {
+        pr_err("Error in getting BATT_SOC, rc=%d\n", rc);
+        goto out;
+    }
 
-	/* We need 2 most significant bytes here */
-	bsoc = (u32)bsoc >> 16;
-	rc = fg_get_msoc_raw(chip, &msoc_raw);
-	if (rc < 0) {
-		pr_err("Error in getting msoc_raw, rc=%d\n", rc);
-		goto out;
-	}
-	msoc = DIV_ROUND_CLOSEST(msoc_raw * FULL_CAPACITY, FULL_SOC_RAW);
+    /* We need 2 most significant bytes here */
+    bsoc = (u32)bsoc >> 16;
+    rc = fg_get_msoc_raw(chip, &msoc_raw);
+    if (rc < 0) {
+        pr_err("Error in getting msoc_raw, rc=%d\n", rc);
+        goto out;
+    }
+    msoc = DIV_ROUND_CLOSEST(msoc_raw * FULL_CAPACITY, FULL_SOC_RAW);
 
-	fg_dbg(chip, FG_STATUS, "msoc: %d bsoc: %x health: %d status: %d full: %d\n",
-		msoc, bsoc, chip->health, chip->charge_status,
-		chip->charge_full);
-	if (chip->charge_done && !chip->charge_full) {
-		if (msoc >= 99 && chip->health == POWER_SUPPLY_HEALTH_GOOD) {
-			fg_dbg(chip, FG_STATUS, "Setting charge_full to true\n");
-			chip->charge_full = true;
-			/*
-			 * Lower the recharge voltage so that VBAT_LT_RECHG
-			 * signal will not be asserted soon.
-			 */
-			rc = fg_set_recharge_voltage(chip,
-					AUTO_RECHG_VOLT_LOW_LIMIT_MV);
-			if (rc < 0) {
-				pr_err("Error in reducing recharge voltage, rc=%d\n",
-					rc);
-				goto out;
-			}
-		} else {
-			fg_dbg(chip, FG_STATUS, "Terminated charging @ SOC%d\n",
-				msoc);
-		}
-	} else if (msoc_raw <= recharge_soc && chip->charge_full) {
-		if (chip->dt.linearize_soc) {
-			chip->delta_soc = FULL_CAPACITY - msoc;
+    fg_dbg(chip, FG_STATUS, "msoc: %d bsoc: %x health: %d status: %d full: %d\n",
+           msoc, bsoc, chip->health, chip->charge_status,
+           chip->charge_full);
+    if (chip->charge_done && !chip->charge_full) {
+        if (msoc >= 99 && chip->health == POWER_SUPPLY_HEALTH_GOOD) {
+            fg_dbg(chip, FG_STATUS, "Setting charge_full to true\n");
+            chip->charge_full = true;
+            /*
+             * Lower the recharge voltage so that VBAT_LT_RECHG
+             * signal will not be asserted soon.
+             */
+            rc = fg_set_recharge_voltage(chip,
+                                         AUTO_RECHG_VOLT_LOW_LIMIT_MV);
+            if (rc < 0) {
+                pr_err("Error in reducing recharge voltage, rc=%d\n",
+                       rc);
+                goto out;
+            }
+        } else {
+            fg_dbg(chip, FG_STATUS, "Terminated charging @ SOC%d\n",
+                   msoc);
+        }
+    } else if ((msoc_raw <= recharge_soc || !chip->charge_done)
+               && chip->charge_full) {
+        if (chip->dt.linearize_soc) {
+            chip->delta_soc = FULL_CAPACITY - msoc;
 
-			/*
-			 * We're spreading out the delta SOC over every 10%
-			 * change in monotonic SOC. We cannot spread more than
-			 * 9% in the range of 0-100 skipping the first 10%.
-			 */
-			if (chip->delta_soc > 9) {
-				chip->delta_soc = 0;
-				chip->maint_soc = 0;
-			} else {
-				chip->maint_soc = FULL_CAPACITY;
-				chip->last_msoc = msoc;
-			}
-		}
+            /*
+             * We're spreading out the delta SOC over every 10%
+             * change in monotonic SOC. We cannot spread more than
+             * 9% in the range of 0-100 skipping the first 10%.
+             */
+            if (chip->delta_soc > 9) {
+                chip->delta_soc = 0;
+                chip->maint_soc = 0;
+            } else {
+                chip->maint_soc = FULL_CAPACITY;
+                chip->last_msoc = msoc;
+            }
+        }
 
-		/*
-		 * Raise the recharge voltage so that VBAT_LT_RECHG signal
-		 * will be asserted soon as battery SOC had dropped below
-		 * the recharge SOC threshold.
-		 */
-		rc = fg_set_recharge_voltage(chip,
-					chip->dt.recharge_volt_thr_mv);
-		if (rc < 0) {
-			pr_err("Error in setting recharge voltage, rc=%d\n",
-				rc);
-			goto out;
-		}
+        /*
+         * Raise the recharge voltage so that VBAT_LT_RECHG signal
+         * will be asserted soon as battery SOC had dropped below
+         * the recharge SOC threshold.
+         */
+        rc = fg_set_recharge_voltage(chip,
+                                     chip->dt.recharge_volt_thr_mv);
+        if (rc < 0) {
+            pr_err("Error in setting recharge voltage, rc=%d\n",
+                   rc);
+            goto out;
+        }
 
-		/*
-		 * If charge_done is still set, wait for recharging or
-		 * discharging to happen.
-		 */
-		if (chip->charge_done)
-			goto out;
+        /*
+         * If charge_done is still set, wait for recharging or
+         * discharging to happen.
+         */
+        if (chip->charge_done)
+            goto out;
 
-		rc = fg_configure_full_soc(chip, bsoc);
-		if (rc < 0)
-			goto out;
+        rc = fg_configure_full_soc(chip, bsoc);
+        if (rc < 0)
+            goto out;
 
-		chip->charge_full = false;
-		fg_dbg(chip, FG_STATUS, "msoc_raw = %d bsoc: %d recharge_soc: %d delta_soc: %d\n",
-			msoc_raw, bsoc >> 8, recharge_soc, chip->delta_soc);
-	}
+        chip->charge_full = false;
+        fg_dbg(chip, FG_STATUS, "msoc_raw = %d bsoc: %d recharge_soc: %d delta_soc: %d\n",
+               msoc_raw, bsoc >> 8, recharge_soc, chip->delta_soc);
+    }
 
-out:
-	mutex_unlock(&chip->charge_full_lock);
-	return rc;
+    out:
+    mutex_unlock(&chip->charge_full_lock);
+    return rc;
 }
 
 #define RCONN_CONFIG_BIT	BIT(0)
@@ -1934,6 +1984,44 @@ static int fg_rconn_config(struct fg_chip *chip)
 	return 0;
 }
 
+static int fg_set_jeita_threshold(struct fg_chip *chip,
+				enum jeita_levels level, int temp_decidegC)
+{
+	int rc;
+	u8 val;
+	u16 reg;
+
+	if (temp_decidegC < -300 || temp_decidegC > 970)
+		return -EINVAL;
+
+	/* Resolution is 0.5C. Base is -30C. */
+	val = DIV_ROUND_CLOSEST(((temp_decidegC / 10) + 30) * 10, 5);
+	switch (level) {
+	case JEITA_COLD:
+		reg = BATT_INFO_JEITA_TOO_COLD(chip);
+		break;
+	case JEITA_COOL:
+		reg = BATT_INFO_JEITA_COLD(chip);
+		break;
+	case JEITA_WARM:
+		reg = BATT_INFO_JEITA_HOT(chip);
+		break;
+	case JEITA_HOT:
+		reg = BATT_INFO_JEITA_TOO_HOT(chip);
+		break;
+	default:
+		return -EINVAL;
+	}
+
+	rc = fg_write(chip, reg, &val, 1);
+	if (rc < 0) {
+		pr_err("Error in setting jeita level %d, rc=%d\n", level, rc);
+		return rc;
+	}
+
+	return 0;
+}
+
 static int fg_set_constant_chg_voltage(struct fg_chip *chip, int volt_uv)
 {
 	u8 buf[2];
@@ -1983,11 +2071,20 @@ static int fg_set_recharge_soc(struct fg_chip *chip, int recharge_soc)
 
 static int fg_adjust_recharge_soc(struct fg_chip *chip)
 {
+	union power_supply_propval prop = {0, };
 	int rc, msoc, recharge_soc, new_recharge_soc = 0;
 	bool recharge_soc_status;
 
 	if (!chip->dt.auto_recharge_soc)
 		return 0;
+
+	rc = power_supply_get_property(chip->batt_psy, POWER_SUPPLY_PROP_HEALTH,
+		&prop);
+	if (rc < 0) {
+		pr_err("Error in getting battery health, rc=%d\n", rc);
+		return rc;
+	}
+	chip->health = prop.intval;
 
 	recharge_soc = chip->dt.recharge_soc_thr;
 	recharge_soc_status = chip->recharge_soc_adjusted;
@@ -2016,8 +2113,15 @@ static int fg_adjust_recharge_soc(struct fg_chip *chip)
 				return 0;
 			}
 		} else {
-			/* Charging, do nothing */
-			return 0;
+			if (!chip->recharge_soc_adjusted)
+				return 0;
+
+			if (chip->health != POWER_SUPPLY_HEALTH_GOOD)
+				return 0;
+
+			/* Restore the default value */
+			new_recharge_soc = recharge_soc;
+			chip->recharge_soc_adjusted = false;
 		}
 	} else {
 		/* Restore the default value */
@@ -2105,10 +2209,66 @@ static int fg_slope_limit_config(struct fg_chip *chip, int batt_temp)
 	return 0;
 }
 
-static int fg_esr_filter_config(struct fg_chip *chip, int batt_temp)
+static int __fg_esr_filter_config(struct fg_chip *chip,
+				enum esr_filter_status esr_flt_sts)
 {
-	u8 esr_tight_lt_flt, esr_broad_lt_flt;
-	bool cold_temp = false;
+	u8 esr_tight_flt, esr_broad_flt;
+	int esr_tight_flt_upct, esr_broad_flt_upct;
+	int rc;
+
+	if (esr_flt_sts == chip->esr_flt_sts)
+		return 0;
+
+	if (esr_flt_sts == ROOM_TEMP) {
+		esr_tight_flt_upct = chip->dt.esr_tight_flt_upct;
+		esr_broad_flt_upct = chip->dt.esr_broad_flt_upct;
+	} else if (esr_flt_sts == LOW_TEMP) {
+		esr_tight_flt_upct = chip->dt.esr_tight_lt_flt_upct;
+		esr_broad_flt_upct = chip->dt.esr_broad_lt_flt_upct;
+	} else if (esr_flt_sts == RELAX_TEMP) {
+		esr_tight_flt_upct = chip->dt.esr_tight_rt_flt_upct;
+		esr_broad_flt_upct = chip->dt.esr_broad_rt_flt_upct;
+	} else {
+		pr_err("Unknown esr filter config\n");
+		return 0;
+	}
+
+	fg_encode(chip->sp, FG_SRAM_ESR_TIGHT_FILTER, esr_tight_flt_upct,
+		&esr_tight_flt);
+	rc = fg_sram_write(chip, chip->sp[FG_SRAM_ESR_TIGHT_FILTER].addr_word,
+			chip->sp[FG_SRAM_ESR_TIGHT_FILTER].addr_byte,
+			&esr_tight_flt,
+			chip->sp[FG_SRAM_ESR_TIGHT_FILTER].len, FG_IMA_DEFAULT);
+	if (rc < 0) {
+		pr_err("Error in writing ESR LT tight filter, rc=%d\n", rc);
+		return rc;
+	}
+
+	fg_encode(chip->sp, FG_SRAM_ESR_BROAD_FILTER, esr_broad_flt_upct,
+		&esr_broad_flt);
+	rc = fg_sram_write(chip, chip->sp[FG_SRAM_ESR_BROAD_FILTER].addr_word,
+			chip->sp[FG_SRAM_ESR_BROAD_FILTER].addr_byte,
+			&esr_broad_flt,
+			chip->sp[FG_SRAM_ESR_BROAD_FILTER].len, FG_IMA_DEFAULT);
+	if (rc < 0) {
+		pr_err("Error in writing ESR LT broad filter, rc=%d\n", rc);
+		return rc;
+	}
+
+	chip->esr_flt_sts = esr_flt_sts;
+	fg_dbg(chip, FG_STATUS, "applied ESR filter %d values\n", esr_flt_sts);
+	return 0;
+}
+
+#define DT_IRQ_COUNT			3
+#define DELTA_TEMP_IRQ_TIME_MS		300000
+#define ESR_FILTER_ALARM_TIME_MS	900000
+static int fg_esr_filter_config(struct fg_chip *chip, int batt_temp,
+				bool override)
+{
+	enum esr_filter_status esr_flt_sts = ROOM_TEMP;
+	bool qnovo_en, input_present, count_temp_irq = false;
+	s64 time_ms;
 	int rc;
 
 	/*
@@ -2118,6 +2278,47 @@ static int fg_esr_filter_config(struct fg_chip *chip, int batt_temp)
 	if (batt_temp < -210)
 		return 0;
 
+	qnovo_en = is_qnovo_en(chip);
+	input_present = is_input_present(chip);
+
+	/*
+	 * If Qnovo is enabled, after hitting a lower battery temperature of
+	 * say 6 C, count the delta battery temperature interrupts for a
+	 * certain period of time when the battery temperature increases.
+	 * Switch to relaxed filter coefficients once the temperature increase
+	 * is qualified so that ESR accuracy can be improved.
+	 */
+	if (qnovo_en && !override) {
+		if (input_present) {
+			if (chip->esr_flt_sts == RELAX_TEMP) {
+				/* do nothing */
+				return 0;
+			}
+
+			count_temp_irq =  true;
+			if (chip->delta_temp_irq_count) {
+				/* Don't count when temperature is dropping. */
+				if (batt_temp <= chip->last_batt_temp)
+					count_temp_irq = false;
+			} else {
+				/*
+				 * Starting point for counting. Check if the
+				 * temperature is qualified.
+				 */
+				if (batt_temp > chip->dt.esr_flt_rt_switch_temp)
+					count_temp_irq = false;
+				else
+					chip->last_delta_temp_time =
+						ktime_get();
+			}
+		} else {
+			chip->delta_temp_irq_count = 0;
+			rc = alarm_try_to_cancel(&chip->esr_filter_alarm);
+			if (rc < 0)
+				pr_err("Couldn't cancel esr_filter_alarm\n");
+		}
+	}
+
 	/*
 	 * If battery temperature is lesser than 10 C (default), then apply the
 	 * ESR low temperature tight and broad filter values to ESR room
@@ -2125,45 +2326,78 @@ static int fg_esr_filter_config(struct fg_chip *chip, int batt_temp)
 	 * than 10 C, then apply back the room temperature ESR filter
 	 * coefficients to ESR room temperature tight and broad filters.
 	 */
-	if (batt_temp > chip->dt.esr_flt_switch_temp
-		&& chip->esr_flt_cold_temp_en) {
-		fg_encode(chip->sp, FG_SRAM_ESR_TIGHT_FILTER,
-			chip->dt.esr_tight_flt_upct, &esr_tight_lt_flt);
-		fg_encode(chip->sp, FG_SRAM_ESR_BROAD_FILTER,
-			chip->dt.esr_broad_flt_upct, &esr_broad_lt_flt);
-	} else if (batt_temp <= chip->dt.esr_flt_switch_temp
-			&& !chip->esr_flt_cold_temp_en) {
-		fg_encode(chip->sp, FG_SRAM_ESR_TIGHT_FILTER,
-			chip->dt.esr_tight_lt_flt_upct, &esr_tight_lt_flt);
-		fg_encode(chip->sp, FG_SRAM_ESR_BROAD_FILTER,
-			chip->dt.esr_broad_lt_flt_upct, &esr_broad_lt_flt);
-		cold_temp = true;
-	} else {
-		return 0;
+	if (batt_temp > chip->dt.esr_flt_switch_temp)
+		esr_flt_sts = ROOM_TEMP;
+	else
+		esr_flt_sts = LOW_TEMP;
+
+	if (count_temp_irq) {
+		time_ms = ktime_ms_delta(ktime_get(),
+				chip->last_delta_temp_time);
+		chip->delta_temp_irq_count++;
+		fg_dbg(chip, FG_STATUS, "dt_irq_count: %d\n",
+			chip->delta_temp_irq_count);
+
+		if (chip->delta_temp_irq_count >= DT_IRQ_COUNT
+			&& time_ms <= DELTA_TEMP_IRQ_TIME_MS) {
+			fg_dbg(chip, FG_STATUS, "%d interrupts in %lld ms\n",
+				chip->delta_temp_irq_count, time_ms);
+			esr_flt_sts = RELAX_TEMP;
+		}
 	}
 
-	rc = fg_sram_write(chip, chip->sp[FG_SRAM_ESR_TIGHT_FILTER].addr_word,
-			chip->sp[FG_SRAM_ESR_TIGHT_FILTER].addr_byte,
-			&esr_tight_lt_flt,
-			chip->sp[FG_SRAM_ESR_TIGHT_FILTER].len, FG_IMA_DEFAULT);
-	if (rc < 0) {
-		pr_err("Error in writing ESR LT tight filter, rc=%d\n", rc);
+	rc = __fg_esr_filter_config(chip, esr_flt_sts);
+	if (rc < 0)
 		return rc;
-	}
 
-	rc = fg_sram_write(chip, chip->sp[FG_SRAM_ESR_BROAD_FILTER].addr_word,
-			chip->sp[FG_SRAM_ESR_BROAD_FILTER].addr_byte,
-			&esr_broad_lt_flt,
-			chip->sp[FG_SRAM_ESR_BROAD_FILTER].len, FG_IMA_DEFAULT);
-	if (rc < 0) {
-		pr_err("Error in writing ESR LT broad filter, rc=%d\n", rc);
-		return rc;
-	}
+	if (esr_flt_sts == RELAX_TEMP)
+		alarm_start_relative(&chip->esr_filter_alarm,
+			ms_to_ktime(ESR_FILTER_ALARM_TIME_MS));
 
-	chip->esr_flt_cold_temp_en = cold_temp;
-	fg_dbg(chip, FG_STATUS, "applied %s ESR filter values\n",
-		cold_temp ? "cold" : "normal");
 	return 0;
+}
+
+#define FG_ESR_FILTER_RESTART_MS	60000
+static void esr_filter_work(struct work_struct *work)
+{
+	struct fg_chip *chip = container_of(work,
+			struct fg_chip, esr_filter_work);
+	int rc, batt_temp;
+
+	rc = fg_get_battery_temp(chip, &batt_temp);
+	if (rc < 0) {
+		pr_err("Error in getting batt_temp\n");
+		alarm_start_relative(&chip->esr_filter_alarm,
+			ms_to_ktime(FG_ESR_FILTER_RESTART_MS));
+	}
+
+	rc = fg_esr_filter_config(chip, batt_temp, true);
+	if (rc < 0) {
+		pr_err("Error in configuring ESR filter rc:%d\n", rc);
+		alarm_start_relative(&chip->esr_filter_alarm,
+			ms_to_ktime(FG_ESR_FILTER_RESTART_MS));
+	}
+
+	chip->delta_temp_irq_count = 0;
+	pm_relax(chip->dev);
+}
+
+static enum alarmtimer_restart fg_esr_filter_alarm_cb(struct alarm *alarm,
+							ktime_t now)
+{
+	struct fg_chip *chip = container_of(alarm, struct fg_chip,
+					esr_filter_alarm);
+
+	fg_dbg(chip, FG_STATUS, "ESR filter alarm triggered %lld\n",
+		ktime_to_ms(now));
+	/*
+	 * We cannot vote for awake votable here as that takes a mutex lock
+	 * and this is executed in an atomic context.
+	 */
+	pm_stay_awake(chip->dev);
+	schedule_work(&chip->esr_filter_work);
+
+	return ALARMTIMER_NORESTART;
 }
 
 static int fg_esr_fcc_config(struct fg_chip *chip)
@@ -2379,7 +2613,7 @@ static void clear_cycle_counter(struct fg_chip *chip)
 	}
 	rc = fg_sram_write(chip, CYCLE_COUNT_WORD, CYCLE_COUNT_OFFSET,
 			(u8 *)&chip->cyc_ctr.count,
-			sizeof(chip->cyc_ctr.count) / sizeof(u8 *),
+			sizeof(chip->cyc_ctr.count) / (sizeof(u8 *)),
 			FG_IMA_DEFAULT);
 	if (rc < 0)
 		pr_err("failed to clear cycle counter rc=%d\n", rc);
@@ -2551,6 +2785,7 @@ static void status_change_work(struct work_struct *work)
 	}
 
 	fg_ttf_update(chip);
+	chip->prev_charge_status = chip->charge_status;
 out:
 	fg_dbg(chip, FG_POWER_SUPPLY, "charge_status:%d charge_type:%d charge_done:%d\n",
 		chip->charge_status, chip->charge_type, chip->charge_done);
@@ -2655,6 +2890,49 @@ static bool is_profile_load_required(struct fg_chip *chip)
 	return true;
 }
 
+static void fg_update_batt_profile(struct fg_chip *chip)
+{
+	int rc, offset;
+	u8 val;
+
+	rc = fg_sram_read(chip, PROFILE_INTEGRITY_WORD,
+			SW_CONFIG_OFFSET, &val, 1, FG_IMA_DEFAULT);
+	if (rc < 0) {
+		pr_err("Error in reading SW_CONFIG_OFFSET, rc=%d\n", rc);
+		return;
+	}
+
+	/*
+	 * If the RCONN had not been updated, no need to update battery
+	 * profile. Else, update the battery profile so that the profile
+	 * modified by bootloader or HLOS matches with the profile read
+	 * from device tree.
+	 */
+
+	if (!(val & RCONN_CONFIG_BIT))
+		return;
+
+	rc = fg_sram_read(chip, ESR_RSLOW_CHG_WORD,
+			ESR_RSLOW_CHG_OFFSET, &val, 1, FG_IMA_DEFAULT);
+	if (rc < 0) {
+		pr_err("Error in reading ESR_RSLOW_CHG_OFFSET, rc=%d\n", rc);
+		return;
+	}
+	offset = (ESR_RSLOW_CHG_WORD - PROFILE_LOAD_WORD) * 4
+			+ ESR_RSLOW_CHG_OFFSET;
+	chip->batt_profile[offset] = val;
+
+	rc = fg_sram_read(chip, ESR_RSLOW_DISCHG_WORD,
+			ESR_RSLOW_DISCHG_OFFSET, &val, 1, FG_IMA_DEFAULT);
+	if (rc < 0) {
+		pr_err("Error in reading ESR_RSLOW_DISCHG_OFFSET, rc=%d\n", rc);
+		return;
+	}
+	offset = (ESR_RSLOW_DISCHG_WORD - PROFILE_LOAD_WORD) * 4
+			+ ESR_RSLOW_DISCHG_OFFSET;
+	chip->batt_profile[offset] = val;
+}
+
 static void clear_battery_profile(struct fg_chip *chip)
 {
 	u8 val = 0;
@@ -2738,6 +3016,8 @@ static void profile_load_work(struct work_struct *work)
 	if (!chip->profile_available)
 		goto out;
 
+	fg_update_batt_profile(chip);
+
 	if (!is_profile_load_required(chip))
 		goto done;
 
@@ -2798,6 +3078,10 @@ done:
 			pr_err("Error in loading capacity learning data, rc:%d\n",
 				rc);
 	}
+
+	rc = fg_rconn_config(chip);
+	if (rc < 0)
+		pr_err("Error in configuring Rconn, rc=%d\n", rc);
 
 	batt_psy_initialized(chip);
 	fg_notify_charger(chip);
@@ -3290,20 +3574,21 @@ static int fg_force_esr_meas(struct fg_chip *chip)
 	int rc;
 	int esr_uohms;
 
+	mutex_lock(&chip->qnovo_esr_ctrl_lock);
 	/* force esr extraction enable */
 	rc = fg_sram_masked_write(chip, ESR_EXTRACTION_ENABLE_WORD,
 			ESR_EXTRACTION_ENABLE_OFFSET, BIT(0), BIT(0),
 			FG_IMA_DEFAULT);
 	if (rc < 0) {
 		pr_err("failed to enable esr extn rc=%d\n", rc);
-		return rc;
+		goto out;
 	}
 
 	rc = fg_masked_write(chip, BATT_INFO_QNOVO_CFG(chip),
 			LD_REG_CTRL_BIT, 0);
 	if (rc < 0) {
 		pr_err("Error in configuring qnovo_cfg rc=%d\n", rc);
-		return rc;
+		goto out;
 	}
 
 	rc = fg_masked_write(chip, BATT_INFO_TM_MISC1(chip),
@@ -3311,24 +3596,36 @@ static int fg_force_esr_meas(struct fg_chip *chip)
 			ESR_REQ_CTL_BIT | ESR_REQ_CTL_EN_BIT);
 	if (rc < 0) {
 		pr_err("Error in configuring force ESR rc=%d\n", rc);
-		return rc;
+		goto out;
 	}
+
+	/*
+	 * Release and grab the lock again after 1.5 seconds so that prepare
+	 * callback can succeed if the request comes in between.
+	 */
+	mutex_unlock(&chip->qnovo_esr_ctrl_lock);
 
 	/* wait 1.5 seconds for hw to measure ESR */
 	msleep(1500);
+
+	mutex_lock(&chip->qnovo_esr_ctrl_lock);
 	rc = fg_masked_write(chip, BATT_INFO_TM_MISC1(chip),
 			ESR_REQ_CTL_BIT | ESR_REQ_CTL_EN_BIT,
 			0);
 	if (rc < 0) {
 		pr_err("Error in restoring force ESR rc=%d\n", rc);
-		return rc;
+		goto out;
 	}
+
+	/* If qnovo is disabled, then leave ESR extraction enabled */
+	if (!chip->qnovo_enable)
+		goto done;
 
 	rc = fg_masked_write(chip, BATT_INFO_QNOVO_CFG(chip),
 			LD_REG_CTRL_BIT, LD_REG_CTRL_BIT);
 	if (rc < 0) {
 		pr_err("Error in restoring qnovo_cfg rc=%d\n", rc);
-		return rc;
+		goto out;
 	}
 
 	/* force esr extraction disable */
@@ -3337,36 +3634,46 @@ static int fg_force_esr_meas(struct fg_chip *chip)
 			FG_IMA_DEFAULT);
 	if (rc < 0) {
 		pr_err("failed to disable esr extn rc=%d\n", rc);
-		return rc;
+		goto out;
 	}
 
+done:
 	fg_get_battery_resistance(chip, &esr_uohms);
 	fg_dbg(chip, FG_STATUS, "ESR uohms = %d\n", esr_uohms);
-
+out:
+	mutex_unlock(&chip->qnovo_esr_ctrl_lock);
 	return rc;
 }
 
 static int fg_prepare_for_qnovo(struct fg_chip *chip, int qnovo_enable)
 {
-	int rc;
+	int rc = 0;
 
+	mutex_lock(&chip->qnovo_esr_ctrl_lock);
 	/* force esr extraction disable when qnovo enables */
 	rc = fg_sram_masked_write(chip, ESR_EXTRACTION_ENABLE_WORD,
 			ESR_EXTRACTION_ENABLE_OFFSET,
 			BIT(0), qnovo_enable ? 0 : BIT(0),
 			FG_IMA_DEFAULT);
-	if (rc < 0)
+	if (rc < 0) {
 		pr_err("Error in configuring esr extraction rc=%d\n", rc);
+		goto out;
+	}
 
 	rc = fg_masked_write(chip, BATT_INFO_QNOVO_CFG(chip),
 			LD_REG_CTRL_BIT,
 			qnovo_enable ? LD_REG_CTRL_BIT : 0);
 	if (rc < 0) {
 		pr_err("Error in configuring qnovo_cfg rc=%d\n", rc);
-		return rc;
+		goto out;
 	}
-	fg_dbg(chip, FG_STATUS, "Prepared for Qnovo\n");
-	return 0;
+
+	fg_dbg(chip, FG_STATUS, "%s for Qnovo\n",
+		qnovo_enable ? "Prepared" : "Unprepared");
+	chip->qnovo_enable = qnovo_enable;
+out:
+	mutex_unlock(&chip->qnovo_esr_ctrl_lock);
+	return rc;
 }
 
 static void ttf_work(struct work_struct *work)
@@ -3456,6 +3763,34 @@ static int fg_psy_get_property(struct power_supply *psy,
 		break;
 	case POWER_SUPPLY_PROP_TEMP:
 		rc = fg_get_battery_temp(chip, &pval->intval);
+		break;
+	case POWER_SUPPLY_PROP_COLD_TEMP:
+		rc = fg_get_jeita_threshold(chip, JEITA_COLD, &pval->intval);
+		if (rc < 0) {
+			pr_err("Error in reading jeita_cold, rc=%d\n", rc);
+			return rc;
+		}
+		break;
+	case POWER_SUPPLY_PROP_COOL_TEMP:
+		rc = fg_get_jeita_threshold(chip, JEITA_COOL, &pval->intval);
+		if (rc < 0) {
+			pr_err("Error in reading jeita_cool, rc=%d\n", rc);
+			return rc;
+		}
+		break;
+	case POWER_SUPPLY_PROP_WARM_TEMP:
+		rc = fg_get_jeita_threshold(chip, JEITA_WARM, &pval->intval);
+		if (rc < 0) {
+			pr_err("Error in reading jeita_warm, rc=%d\n", rc);
+			return rc;
+		}
+		break;
+	case POWER_SUPPLY_PROP_HOT_TEMP:
+		rc = fg_get_jeita_threshold(chip, JEITA_HOT, &pval->intval);
+		if (rc < 0) {
+			pr_err("Error in reading jeita_hot, rc=%d\n", rc);
+			return rc;
+		}
 		break;
 	case POWER_SUPPLY_PROP_RESISTANCE:
 		rc = fg_get_battery_resistance(chip, &pval->intval);
@@ -3583,6 +3918,48 @@ static int fg_psy_set_property(struct power_supply *psy,
 			return -EINVAL;
 		}
 		break;
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+		if (chip->cl.active) {
+			pr_warn("Capacity learning active!\n");
+			return 0;
+		}
+		if (pval->intval <= 0 || pval->intval > chip->cl.nom_cap_uah) {
+			pr_err("charge_full is out of bounds\n");
+			return -EINVAL;
+		}
+		chip->cl.learned_cc_uah = pval->intval;
+		rc = fg_save_learned_cap_to_sram(chip);
+		if (rc < 0)
+			pr_err("Error in saving learned_cc_uah, rc=%d\n", rc);
+		break;
+	case POWER_SUPPLY_PROP_COLD_TEMP:
+		rc = fg_set_jeita_threshold(chip, JEITA_COLD, pval->intval);
+		if (rc < 0) {
+			pr_err("Error in writing jeita_cold, rc=%d\n", rc);
+			return rc;
+		}
+		break;
+	case POWER_SUPPLY_PROP_COOL_TEMP:
+		rc = fg_set_jeita_threshold(chip, JEITA_COOL, pval->intval);
+		if (rc < 0) {
+			pr_err("Error in writing jeita_cool, rc=%d\n", rc);
+			return rc;
+		}
+		break;
+	case POWER_SUPPLY_PROP_WARM_TEMP:
+		rc = fg_set_jeita_threshold(chip, JEITA_WARM, pval->intval);
+		if (rc < 0) {
+			pr_err("Error in writing jeita_warm, rc=%d\n", rc);
+			return rc;
+		}
+		break;
+	case POWER_SUPPLY_PROP_HOT_TEMP:
+		rc = fg_set_jeita_threshold(chip, JEITA_HOT, pval->intval);
+		if (rc < 0) {
+			pr_err("Error in writing jeita_hot, rc=%d\n", rc);
+			return rc;
+		}
+		break;
 	default:
 		break;
 	}
@@ -3598,6 +3975,11 @@ static int fg_property_is_writeable(struct power_supply *psy,
 	case POWER_SUPPLY_PROP_CONSTANT_CHARGE_VOLTAGE:
 	case POWER_SUPPLY_PROP_CC_STEP:
 	case POWER_SUPPLY_PROP_CC_STEP_SEL:
+	case POWER_SUPPLY_PROP_CHARGE_FULL:
+	case POWER_SUPPLY_PROP_COLD_TEMP:
+	case POWER_SUPPLY_PROP_COOL_TEMP:
+	case POWER_SUPPLY_PROP_WARM_TEMP:
+	case POWER_SUPPLY_PROP_HOT_TEMP:
 		return 1;
 	default:
 		break;
@@ -3617,6 +3999,14 @@ static int fg_notifier_cb(struct notifier_block *nb,
 	struct power_supply *psy = data;
 	struct fg_chip *chip = container_of(nb, struct fg_chip, nb);
 
+	spin_lock(&chip->suspend_lock);
+	if (chip->suspended) {
+		/* Return if we are still suspended */
+		spin_unlock(&chip->suspend_lock);
+		return NOTIFY_OK;
+	}
+	spin_unlock(&chip->suspend_lock);
+
 	if (event != PSY_EVENT_PROP_CHANGED)
 		return NOTIFY_OK;
 
@@ -3624,6 +4014,7 @@ static int fg_notifier_cb(struct notifier_block *nb,
 		return NOTIFY_OK;
 
 	if ((strcmp(psy->desc->name, "battery") == 0)
+		|| (strcmp(psy->desc->name, "parallel") == 0)
 		|| (strcmp(psy->desc->name, "usb") == 0)) {
 		/*
 		 * We cannot vote for awake votable here as that takes
@@ -3640,6 +4031,10 @@ static enum power_supply_property fg_psy_props[] = {
 	POWER_SUPPLY_PROP_CAPACITY,
 	POWER_SUPPLY_PROP_CAPACITY_RAW,
 	POWER_SUPPLY_PROP_TEMP,
+	POWER_SUPPLY_PROP_COLD_TEMP,
+	POWER_SUPPLY_PROP_COOL_TEMP,
+	POWER_SUPPLY_PROP_WARM_TEMP,
+	POWER_SUPPLY_PROP_HOT_TEMP,
 	POWER_SUPPLY_PROP_VOLTAGE_NOW,
 	POWER_SUPPLY_PROP_VOLTAGE_OCV,
 	POWER_SUPPLY_PROP_CURRENT_NOW,
@@ -3719,6 +4114,16 @@ static int fg_hw_init(struct fg_chip *chip)
 			chip->sp[FG_SRAM_SYS_TERM_CURR].len, FG_IMA_DEFAULT);
 	if (rc < 0) {
 		pr_err("Error in writing sys_term_curr, rc=%d\n", rc);
+		return rc;
+	}
+
+	fg_encode(chip->sp, FG_SRAM_CUTOFF_CURR, chip->dt.cutoff_curr_ma,
+		buf);
+	rc = fg_sram_write(chip, chip->sp[FG_SRAM_CUTOFF_CURR].addr_word,
+			chip->sp[FG_SRAM_CUTOFF_CURR].addr_byte, buf,
+			chip->sp[FG_SRAM_CUTOFF_CURR].len, FG_IMA_DEFAULT);
+	if (rc < 0) {
+		pr_err("Error in writing cutoff_curr, rc=%d\n", rc);
 		return rc;
 	}
 
@@ -3819,29 +4224,29 @@ static int fg_hw_init(struct fg_chip *chip)
 		}
 	}
 
-	get_temp_setpoint(chip->dt.jeita_thresholds[JEITA_COLD], &val);
-	rc = fg_write(chip, BATT_INFO_JEITA_TOO_COLD(chip), &val, 1);
+	rc = fg_set_jeita_threshold(chip, JEITA_COLD,
+		chip->dt.jeita_thresholds[JEITA_COLD] * 10);
 	if (rc < 0) {
 		pr_err("Error in writing jeita_cold, rc=%d\n", rc);
 		return rc;
 	}
 
-	get_temp_setpoint(chip->dt.jeita_thresholds[JEITA_COOL], &val);
-	rc = fg_write(chip, BATT_INFO_JEITA_COLD(chip), &val, 1);
+	rc = fg_set_jeita_threshold(chip, JEITA_COOL,
+		chip->dt.jeita_thresholds[JEITA_COOL] * 10);
 	if (rc < 0) {
 		pr_err("Error in writing jeita_cool, rc=%d\n", rc);
 		return rc;
 	}
 
-	get_temp_setpoint(chip->dt.jeita_thresholds[JEITA_WARM], &val);
-	rc = fg_write(chip, BATT_INFO_JEITA_HOT(chip), &val, 1);
+	rc = fg_set_jeita_threshold(chip, JEITA_WARM,
+		chip->dt.jeita_thresholds[JEITA_WARM] * 10);
 	if (rc < 0) {
 		pr_err("Error in writing jeita_warm, rc=%d\n", rc);
 		return rc;
 	}
 
-	get_temp_setpoint(chip->dt.jeita_thresholds[JEITA_HOT], &val);
-	rc = fg_write(chip, BATT_INFO_JEITA_TOO_HOT(chip), &val, 1);
+	rc = fg_set_jeita_threshold(chip, JEITA_HOT,
+		chip->dt.jeita_thresholds[JEITA_HOT] * 10);
 	if (rc < 0) {
 		pr_err("Error in writing jeita_hot, rc=%d\n", rc);
 		return rc;
@@ -3901,12 +4306,6 @@ static int fg_hw_init(struct fg_chip *chip)
 		return rc;
 	}
 #endif //CONFIG_HTC_BATT
-
-	rc = fg_rconn_config(chip);
-	if (rc < 0) {
-		pr_err("Error in configuring Rconn, rc=%d\n", rc);
-		return rc;
-	}
 
 	fg_encode(chip->sp, FG_SRAM_ESR_TIGHT_FILTER,
 		chip->dt.esr_tight_flt_upct, buf);
@@ -4076,14 +4475,14 @@ static irqreturn_t fg_delta_batt_temp_irq_handler(int irq, void *data)
 	union power_supply_propval prop = {0, };
 	int rc, batt_temp;
 
-	fg_dbg(chip, FG_IRQ, "irq %d triggered\n", irq);
 	rc = fg_get_battery_temp(chip, &batt_temp);
 	if (rc < 0) {
 		pr_err("Error in getting batt_temp\n");
 		return IRQ_HANDLED;
 	}
+	fg_dbg(chip, FG_IRQ, "irq %d triggered bat_temp: %d\n", irq, batt_temp);
 
-	rc = fg_esr_filter_config(chip, batt_temp);
+	rc = fg_esr_filter_config(chip, batt_temp, false);
 	if (rc < 0)
 		pr_err("Error in configuring ESR filter rc:%d\n", rc);
 
@@ -4454,6 +4853,7 @@ static int fg_parse_ki_coefficients(struct fg_chip *chip)
 #define DEFAULT_CHG_TERM_CURR_MA	100
 #define DEFAULT_CHG_TERM_BASE_CURR_MA	75
 #define DEFAULT_SYS_TERM_CURR_MA	-125
+#define DEFAULT_CUTOFF_CURR_MA		500
 #define DEFAULT_DELTA_SOC_THR		1
 #define DEFAULT_RECHARGE_SOC_THR	95
 #define DEFAULT_BATT_TEMP_COLD		0
@@ -4472,8 +4872,11 @@ static int fg_parse_ki_coefficients(struct fg_chip *chip)
 #define DEFAULT_ESR_FLT_TEMP_DECIDEGC	100
 #define DEFAULT_ESR_TIGHT_FLT_UPCT	3907
 #define DEFAULT_ESR_BROAD_FLT_UPCT	99610
-#define DEFAULT_ESR_TIGHT_LT_FLT_UPCT	48829
-#define DEFAULT_ESR_BROAD_LT_FLT_UPCT	148438
+#define DEFAULT_ESR_TIGHT_LT_FLT_UPCT	30000
+#define DEFAULT_ESR_BROAD_LT_FLT_UPCT	30000
+#define DEFAULT_ESR_FLT_RT_DECIDEGC	60
+#define DEFAULT_ESR_TIGHT_RT_FLT_UPCT	5860
+#define DEFAULT_ESR_BROAD_RT_FLT_UPCT	156250
 #define DEFAULT_ESR_CLAMP_MOHMS		20
 #define DEFAULT_ESR_PULSE_THRESH_MA	110
 #define DEFAULT_ESR_MEAS_CURR_MA	120
@@ -4614,6 +5017,12 @@ static int fg_parse_dt(struct fg_chip *chip)
 		chip->dt.chg_term_base_curr_ma = DEFAULT_CHG_TERM_BASE_CURR_MA;
 	else
 		chip->dt.chg_term_base_curr_ma = temp;
+
+	rc = of_property_read_u32(node, "qcom,fg-cutoff-current", &temp);
+	if (rc < 0)
+		chip->dt.cutoff_curr_ma = DEFAULT_CUTOFF_CURR_MA;
+	else
+		chip->dt.cutoff_curr_ma = temp;
 
 	rc = of_property_read_u32(node, "qcom,fg-delta-soc-thr", &temp);
 	if (rc < 0)
@@ -4799,6 +5208,27 @@ static int fg_parse_dt(struct fg_chip *chip)
 	else
 		chip->dt.esr_broad_lt_flt_upct = temp;
 
+	rc = of_property_read_u32(node, "qcom,fg-esr-rt-filter-switch-temp",
+			&temp);
+	if (rc < 0)
+		chip->dt.esr_flt_rt_switch_temp = DEFAULT_ESR_FLT_RT_DECIDEGC;
+	else
+		chip->dt.esr_flt_rt_switch_temp = temp;
+
+	rc = of_property_read_u32(node, "qcom,fg-esr-tight-rt-filter-micro-pct",
+			&temp);
+	if (rc < 0)
+		chip->dt.esr_tight_rt_flt_upct = DEFAULT_ESR_TIGHT_RT_FLT_UPCT;
+	else
+		chip->dt.esr_tight_rt_flt_upct = temp;
+
+	rc = of_property_read_u32(node, "qcom,fg-esr-broad-rt-filter-micro-pct",
+			&temp);
+	if (rc < 0)
+		chip->dt.esr_broad_rt_flt_upct = DEFAULT_ESR_BROAD_RT_FLT_UPCT;
+	else
+		chip->dt.esr_broad_rt_flt_upct = temp;
+
 	rc = fg_parse_slope_limit_coefficients(chip);
 	if (rc < 0)
 		pr_err("Error in parsing slope limit coeffs, rc=%d\n", rc);
@@ -4830,6 +5260,7 @@ static int fg_parse_dt(struct fg_chip *chip)
 
 static void fg_cleanup(struct fg_chip *chip)
 {
+	alarm_try_to_cancel(&chip->esr_filter_alarm);
 	power_supply_unreg_notifier(&chip->nb);
 	debugfs_remove_recursive(chip->dfs_root);
 	if (chip->awake_votable)
@@ -4933,12 +5364,17 @@ static int fg_gen3_probe(struct platform_device *pdev)
 	mutex_init(&chip->cl.lock);
 	mutex_init(&chip->ttf.lock);
 	mutex_init(&chip->charge_full_lock);
+	mutex_init(&chip->qnovo_esr_ctrl_lock);
+	spin_lock_init(&chip->suspend_lock);
 	init_completion(&chip->soc_update);
 	init_completion(&chip->soc_ready);
 	INIT_DELAYED_WORK(&chip->profile_load_work, profile_load_work);
 	INIT_WORK(&chip->status_change_work, status_change_work);
 	INIT_DELAYED_WORK(&chip->ttf_work, ttf_work);
 	INIT_DELAYED_WORK(&chip->sram_dump_work, sram_dump_work);
+	INIT_WORK(&chip->esr_filter_work, esr_filter_work);
+	alarm_init(&chip->esr_filter_alarm, ALARM_BOOTTIME,
+			fg_esr_filter_alarm_cb);
 
 	rc = fg_memif_init(chip);
 	if (rc < 0) {
@@ -5010,7 +5446,7 @@ static int fg_gen3_probe(struct platform_device *pdev)
 	if (!rc) {
 		pr_info("battery SOC:%d voltage: %duV temp: %d id: %dKOhms\n",
 			msoc, volt_uv, batt_temp, chip->batt_id_ohms / 1000);
-		rc = fg_esr_filter_config(chip, batt_temp);
+		rc = fg_esr_filter_config(chip, batt_temp, false);
 		if (rc < 0)
 			pr_err("Error in configuring ESR filter rc:%d\n", rc);
 	}
@@ -5037,6 +5473,10 @@ static int fg_gen3_suspend(struct device *dev)
 	struct fg_chip *chip = dev_get_drvdata(dev);
 	int rc;
 
+	spin_lock(&chip->suspend_lock);
+	chip->suspended = true;
+	spin_unlock(&chip->suspend_lock);
+
 	rc = fg_esr_timer_config(chip, true);
 	if (rc < 0)
 		pr_err("Error in configuring ESR timer, rc=%d\n", rc);
@@ -5060,6 +5500,16 @@ static int fg_gen3_resume(struct device *dev)
 	if (fg_sram_dump)
 		schedule_delayed_work(&chip->sram_dump_work,
 				msecs_to_jiffies(fg_sram_dump_period_ms));
+
+	if (!work_pending(&chip->status_change_work)) {
+		pm_stay_awake(chip->dev);
+		schedule_work(&chip->status_change_work);
+	}
+
+	spin_lock(&chip->suspend_lock);
+	chip->suspended = false;
+	spin_unlock(&chip->suspend_lock);
+
 	return 0;
 }
 

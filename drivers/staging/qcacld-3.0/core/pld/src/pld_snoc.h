@@ -355,14 +355,5 @@ static inline int pld_snoc_force_assert_target(struct device *dev)
 	return icnss_trigger_recovery(dev);
 }
 
-static inline void pld_snoc_increment_driver_load_cnt(void)
-{
-	icnss_increment_driver_load_cnt();
-}
-
-static inline int pld_snoc_get_driver_load_cnt(void)
-{
-	return icnss_get_driver_load_cnt();
-}
 #endif
 #endif

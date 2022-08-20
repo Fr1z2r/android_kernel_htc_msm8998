@@ -363,11 +363,15 @@ void __init setup_arch(char **cmdline_p)
 
 #ifdef CONFIG_ARM64_SW_TTBR0_PAN
 	/*
-	 * Make sure init_thread_info.ttbr0 always generates translation
+	 * Make sure thread_info.ttbr0 always generates translation
 	 * faults in case uaccess_enable() is inadvertently called by the init
 	 * thread.
 	 */
-	init_thread_info.ttbr0 = virt_to_phys(empty_zero_page);
+#ifdef CONFIG_THREAD_INFO_IN_TASK
+	init_task.thread_info.ttbr0 = __pa_symbol(empty_zero_page);
+#else
+	init_thread_info.ttbr0 = __pa_symbol(empty_zero_page);
+#endif
 #endif
 
 #ifdef CONFIG_VT
@@ -425,11 +429,11 @@ void arch_setup_pdev_archdata(struct platform_device *pdev)
 static int dump_kernel_offset(struct notifier_block *self, unsigned long v,
 			      void *p)
 {
-	u64 const kaslr_offset = kimage_vaddr - KIMAGE_VADDR;
+	const unsigned long offset = kaslr_offset();
 
-	if (IS_ENABLED(CONFIG_RANDOMIZE_BASE) && kaslr_offset > 0) {
-		pr_emerg("Kernel Offset: 0x%llx from 0x%lx\n",
-			 kaslr_offset, KIMAGE_VADDR);
+	if (IS_ENABLED(CONFIG_RANDOMIZE_BASE) && offset > 0) {
+		pr_emerg("Kernel Offset: 0x%lx from 0x%lx\n",
+			 offset, KIMAGE_VADDR);
 	} else {
 		pr_emerg("Kernel Offset: disabled\n");
 	}
